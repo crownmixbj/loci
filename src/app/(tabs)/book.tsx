@@ -525,7 +525,7 @@ export default function BookScreen() {
      * bookable, and loses everything they typed if they bounce out. Here the
      * form is already complete and the state survives the round trip.
      */
-    requireAuth(postParcel, {
+    requireAuth(() => void postParcel(), {
       title: 'Sign in to post this parcel',
       reason:
         'A parcel needs an owner: it is how you track it, and how the driver knows who to call at pickup. Your details stay filled in.',
@@ -534,9 +534,9 @@ export default function BookScreen() {
   };
 
   /** Runs only once we know who is posting. */
-  const postParcel = () => {
+  const postParcel = async () => {
     // TODO: replace with an API call; the store is the local source of truth for now.
-    const booking = addBooking({
+    const booking = await addBooking({
       deliveryType: form.deliveryType,
       pickupMode: form.pickupMode,
       dropoffMode: form.dropoffMode,
@@ -571,6 +571,19 @@ export default function BookScreen() {
       notes: form.notes.trim(),
       estimatedFee: fee.total,
     });
+
+    /*
+     * The insert can fail — offline, RLS refusal, a duplicate tracking id. Bail
+     * before clearing the form, or a network blip silently destroys four
+     * sections of typing. `error` on the store carries the reason.
+     */
+    if (!booking) {
+      showDialog(
+        'Could not post the parcel',
+        'Your details are still here. Check your connection and try again.',
+      );
+      return;
+    }
 
     setForm(INITIAL_FORM);
     setErrors({});

@@ -1,6 +1,16 @@
-import { createContext, useCallback, useContext, useMemo, useState, type ReactNode } from 'react';
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useState,
+  type ReactNode,
+} from 'react';
 
-import { DEMO_USER_ID, SESSION_USER, useSession } from '@/store/session';
+import { isSupabaseConfigured } from '@/lib/supabase';
+import { claimBooking, fetchBookings, insertBooking } from '@/store/bookings-remote';
+import { SESSION_USER, useSession } from '@/store/session';
 
 /**
  * What's inside the parcel. "Fragile" is deliberately absent — fragility is a
@@ -660,62 +670,162 @@ const SEED_BOOKINGS: Booking[] = [
   },
 ];
 
+/** What a claim attempt actually did — the UI has to distinguish these. */
+export type ClaimResult = 'claimed' | 'taken' | 'error';
+
 type BookingsContextValue = {
   bookings: Booking[];
-  addBooking: (input: NewBookingInput) => Booking;
-  acceptBooking: (id: string, driver?: string, driverId?: string) => void;
+  /** True during the first load, so screens can avoid flashing an empty state. */
+  loading: boolean;
+  /** Set when the last server call failed. Null once a call succeeds. */
+  error: string | null;
+  refresh: () => Promise<void>;
+  addBooking: (input: NewBookingInput) => Promise<Booking | null>;
+  acceptBooking: (id: string) => Promise<ClaimResult>;
   getBooking: (trackingId: string) => Booking | undefined;
 };
 
 const BookingsContext = createContext<BookingsContextValue | null>(null);
 
 export function BookingsProvider({ children }: { children: ReactNode }) {
-  const [bookings, setBookings] = useState<Booking[]>(SEED_BOOKINGS);
+  /*
+   * Two modes.
+   *
+   * With Supabase configured, this is a cache of the `bookings` table and every
+   * mutation is a round trip — which is what makes an accepted job survive a
+   * refresh and follow the driver to another device.
+   *
+   * Without it, the store falls back to the in-memory seed data so the app is
+   * still explorable before anyone has run `supabase/schema.sql`. That fallback
+   * is a development convenience, not a feature: nothing persists in it.
+   */
+  const remote = isSupabaseConfigured;
+
+  const [bookings, setBookings] = useState<Booking[]>(remote ? [] : SEED_BOOKINGS);
+  const [loading, setLoading] = useState(remote);
+  const [error, setError] = useState<string | null>(null);
+
   // Ownership is stamped here rather than by the form, so no screen can post a
   // parcel on someone else's behalf.
   const { user } = useSession();
 
+  const refresh = useCallback(async () => {
+    if (!remote) return;
+
+    try {
+      setBookings(await fetchBookings());
+      setError(null);
+    } catch (thrown) {
+      setError(thrown instanceof Error ? thrown.message : 'Could not load parcels.');
+    } finally {
+      setLoading(false);
+    }
+  }, [remote]);
+
+  /*
+   * Reload whenever the signed-in user changes. Row Level Security decides what
+   * the server returns, so a stale list from the previous session would be both
+   * wrong and a leak — signing out has to empty it, not just stop updating it.
+   */
+  useEffect(() => {
+    if (!remote) return;
+
+    if (!user) {
+      setBookings([]);
+      setLoading(false);
+      return;
+    }
+
+    setLoading(true);
+    void refresh();
+  }, [remote, user?.id, refresh]);
+
   const addBooking = useCallback(
-    (input: NewBookingInput) => {
-      const booking: Booking = {
+    async (input: NewBookingInput): Promise<Booking | null> => {
+      // Posting is gated behind sign-in, so this is a routing bug if it fires.
+      if (!user) return null;
+
+      const draft = {
         ...input,
-        id: `booking-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
         trackingId: generateTrackingId(),
-        // Non-null: posting a parcel is gated behind sign-in, so reaching here
-        // without a user would be a routing bug. The fallback keeps the demo
-        // seed identity rather than writing an empty owner.
-        senderId: user?.id ?? DEMO_USER_ID,
-        status: input.status ?? 'Booked',
-        driver: null,
-        driverId: null,
-        acceptedAt: null,
-        createdAt: new Date().toISOString(),
+        senderId: user.id,
+        status: input.status ?? ('Booked' as BookingStage),
       };
 
-      // Newest first, so a fresh booking lands at the top of the tracking list.
-      setBookings((prev) => [booking, ...prev]);
-      return booking;
+      if (!remote) {
+        const booking: Booking = {
+          ...draft,
+          id: `booking-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+          driver: null,
+          driverId: null,
+          acceptedAt: null,
+          createdAt: new Date().toISOString(),
+        };
+        setBookings((prev) => [booking, ...prev]);
+        return booking;
+      }
+
+      try {
+        const booking = await insertBooking(draft);
+        // Newest first, matching the server's ordering.
+        setBookings((prev) => [booking, ...prev]);
+        setError(null);
+        return booking;
+      } catch (thrown) {
+        setError(thrown instanceof Error ? thrown.message : 'Could not post the parcel.');
+        return null;
+      }
     },
-    [user?.id],
+    [remote, user],
   );
 
+  /**
+   * Claim a job for the signed-in driver.
+   *
+   * Returns `taken` rather than throwing when someone else got there first:
+   * that is a normal outcome in a marketplace, not an error, and the driver
+   * needs to be told plainly rather than shown a failure.
+   */
   const acceptBooking = useCallback(
-    (id: string, driver: string = user?.name ?? 'Driver', driverId: string = user?.id ?? '') => {
-      setBookings((prev) =>
-        prev.map((booking) =>
-          booking.id === id && !booking.driver
-            ? {
-                ...booking,
-                driver,
-                driverId,
-                acceptedAt: new Date().toISOString(),
-                status: 'Assigned',
-              }
-            : booking,
-        ),
-      );
+    async (id: string): Promise<ClaimResult> => {
+      if (!user) return 'error';
+
+      if (!remote) {
+        let outcome: ClaimResult = 'taken';
+        setBookings((prev) =>
+          prev.map((booking) => {
+            if (booking.id !== id || booking.driver) return booking;
+            outcome = 'claimed';
+            return {
+              ...booking,
+              driver: user.name,
+              driverId: user.id,
+              acceptedAt: new Date().toISOString(),
+              status: 'Assigned',
+            };
+          }),
+        );
+        return outcome;
+      }
+
+      try {
+        const claimed = await claimBooking(id, { id: user.id, name: user.name });
+
+        if (!claimed) {
+          // Someone else has it. Drop it from the feed so the stale card goes.
+          await refresh();
+          return 'taken';
+        }
+
+        setBookings((prev) => prev.map((booking) => (booking.id === id ? claimed : booking)));
+        setError(null);
+        return 'claimed';
+      } catch (thrown) {
+        setError(thrown instanceof Error ? thrown.message : 'Could not accept the job.');
+        return 'error';
+      }
     },
-    [user?.id, user?.name],
+    [remote, user, refresh],
   );
 
   const getBooking = useCallback(
@@ -725,8 +835,8 @@ export function BookingsProvider({ children }: { children: ReactNode }) {
   );
 
   const value = useMemo(
-    () => ({ bookings, addBooking, acceptBooking, getBooking }),
-    [bookings, addBooking, acceptBooking, getBooking],
+    () => ({ bookings, loading, error, refresh, addBooking, acceptBooking, getBooking }),
+    [bookings, loading, error, refresh, addBooking, acceptBooking, getBooking],
   );
 
   return <BookingsContext.Provider value={value}>{children}</BookingsContext.Provider>;

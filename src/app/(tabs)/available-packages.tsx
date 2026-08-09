@@ -124,21 +124,7 @@ export default function AvailablePackagesScreen() {
         { text: 'Cancel', style: 'cancel' },
         {
           text: 'Accept Order',
-          onPress: () => {
-            // Guarded by `handleAccept`, which won't reach here signed out.
-            if (!user) return;
-
-            acceptBooking(booking.id, user.name, user.id);
-            notifyJobAccepted(booking, {
-              name: user.name,
-              email: user.email,
-              phone: user.phone,
-            });
-            router.push({
-              pathname: '/job-accepted',
-              params: { trackingId: booking.trackingId },
-            });
-          },
+          onPress: () => void claim(booking),
         },
       ],
     );
@@ -166,6 +152,34 @@ export default function AvailablePackagesScreen() {
     });
 
     if (!proceed) return;
+  };
+
+  /**
+   * The claim itself. Conditional on the server, so a second driver tapping
+   * Accept a moment later is told the job has gone rather than both being shown
+   * a success screen for the same parcel.
+   */
+  const claim = async (booking: Booking) => {
+    // Guarded by `handleAccept`, which won't reach here signed out.
+    if (!user) return;
+
+    const outcome = await acceptBooking(booking.id);
+
+    if (outcome === 'taken') {
+      showDialog(
+        'Another driver got there first',
+        `${booking.itemDescription} has already been accepted. The feed has been refreshed.`,
+      );
+      return;
+    }
+
+    if (outcome === 'error') {
+      showDialog('Could not accept the job', 'Check your connection and try again.');
+      return;
+    }
+
+    notifyJobAccepted(booking, { name: user.name, email: user.email, phone: user.phone });
+    router.push({ pathname: '/job-accepted', params: { trackingId: booking.trackingId } });
   };
 
   const acceptAsDriver = (booking: Booking) => {

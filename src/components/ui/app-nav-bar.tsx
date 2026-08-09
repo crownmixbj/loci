@@ -1,6 +1,7 @@
 import { usePathname, useRouter } from 'expo-router';
 import {
   House,
+  ClipboardList,
   Info,
   MapPinned,
   Menu,
@@ -53,17 +54,20 @@ function initials(name: string | undefined): string {
  * Rendering the type in Plus Jakarta Sans and adding up the capsule gives a
  * minimum width for each arrangement:
  *
- *   labelled links   877px   LOCI + six words + role pill + avatar + menu
- *   icon-only links  617px   the same links as 34px circles
+ *   labelled links   997px   LOCI + seven words + role pill + avatar + menu
+ *   icon-only links  671px   the same links as 34px circles
  *   drawer only      335px   logo and actions; the hamburger carries the links
  *
- * The old single breakpoint of 760 sat 117px *below* what the labelled layout
- * actually needs, so between 760 and 877 the capsule overflowed and pushed the
- * avatar and hamburger onto its own rounded edge. Each tier now clears its
- * measured minimum with headroom.
+ * Measured against the *widest* role variant — "My Parcels" is 21px longer than
+ * "My Jobs", so sizing to the driver label would overflow for senders.
+ *
+ * These move whenever a link is added. Adding "My Jobs" pushed the labelled row
+ * from 877px to 997px, which silently invalidated the previous 900 breakpoint
+ * and would have put the avatar back on the capsule's rounded edge between 900
+ * and 997. Re-measure after any change to `NAV_LINKS`.
  */
-const LABEL_BREAKPOINT = 900;
-const ICON_LINK_BREAKPOINT = 640;
+const LABEL_BREAKPOINT = 1020;
+const ICON_LINK_BREAKPOINT = 690;
 /** Below this the capsule tightens its padding to survive a 320px phone. */
 const TIGHT_BREAKPOINT = 400;
 
@@ -72,7 +76,14 @@ const TIGHT_BREAKPOINT = 400;
  * `/driver` is reached via the profile icon and from the Drivers screens.
  */
 type NavHref =
-  '/' | '/about' | '/available-packages' | '/book' | '/driver' | '/driver-signup' | '/locations';
+  | '/'
+  | '/about'
+  | '/available-packages'
+  | '/book'
+  | '/driver'
+  | '/driver-signup'
+  | '/locations'
+  | '/my-packages';
 
 /** Home matches exactly; the rest match their prefix. */
 function isActive(pathname: string, href: NavHref): boolean {
@@ -123,6 +134,19 @@ const NAV_LINKS: NavLink[] = [
     description: 'Browse open jobs by route',
   },
   {
+    /*
+      Role-aware, and the reason a claimed job used to vanish: /driver had no
+      nav entry at all, so after accepting one the only routes back were the
+      confirmation screen and the avatar menu. Navigate away and the job was
+      effectively lost.
+    */
+    key: 'mine',
+    label: 'My Jobs',
+    href: '/driver',
+    icon: (color, size) => <ClipboardList color={color} size={size} />,
+    description: "Deliveries you've accepted",
+  },
+  {
     key: 'locations',
     label: 'Hubs',
     href: '/locations',
@@ -151,6 +175,21 @@ export function AppNavBar() {
   // Labels need room; below that the links drop to icons, and below *that* they
   // leave the capsule entirely — the drawer already lists every one of them, so
   // nothing becomes unreachable.
+  /*
+   * The personal entry follows the role: a sender wants their parcels, a driver
+   * wants the jobs they're carrying. Same slot, so the bar doesn't reflow.
+   */
+  const navLinks = NAV_LINKS.map((link) =>
+    link.key === 'mine' && role === 'sender'
+      ? {
+          ...link,
+          label: 'My Parcels',
+          href: '/my-packages' as NavHref,
+          description: "Parcels you've sent",
+        }
+      : link,
+  );
+
   const showLabels = width >= LABEL_BREAKPOINT;
   const showInlineLinks = width >= ICON_LINK_BREAKPOINT;
   const tight = width < TIGHT_BREAKPOINT;
@@ -275,7 +314,7 @@ export function AppNavBar() {
               !showInlineLinks && styles.linksHidden,
             ]}>
             {showInlineLinks &&
-              NAV_LINKS.map((link) => {
+              navLinks.map((link) => {
                 const active = isActive(pathname, link.href);
                 // Deep navy at rest, brand blue when active — both clear AA on
                 // the white capsule, and navy reads far better than slate on a
@@ -422,6 +461,7 @@ export function AppNavBar() {
         onSignOut={handleSignOut}
         user={user}
         isAuthenticated={isAuthenticated}
+        links={navLinks}
       />
 
       <AppStoreModal
@@ -442,6 +482,7 @@ function SideMenu({
   onSignOut,
   user,
   isAuthenticated,
+  links,
 }: {
   open: boolean;
   onClose: () => void;
@@ -451,6 +492,8 @@ function SideMenu({
   onSignOut: () => void;
   user: { name: string; email: string | null } | null;
   isAuthenticated: boolean;
+  /** Passed in so the drawer and the capsule can never list different links. */
+  links: NavLink[];
 }) {
   const theme = useTheme();
   const insets = useSafeAreaInsets();
@@ -486,7 +529,7 @@ function SideMenu({
           </View>
 
           <ScrollView showsVerticalScrollIndicator={false} style={styles.drawerScroll}>
-            {NAV_LINKS.map((link) => {
+            {links.map((link) => {
               const active = isActive(pathname, link.href);
 
               return (
