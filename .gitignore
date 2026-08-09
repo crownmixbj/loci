@@ -31,7 +31,11 @@ yarn-error.*
 *.pem
 
 # local env files
-.env*.local
+# `.env*.local` alone did not cover a plain `.env`, which is the file most
+# people actually create. Everything except the committed template is ignored.
+.env
+.env.*
+!.env.example
 
 # typescript
 *.tsbuildinfo

@@ -1,0 +1,978 @@
+import { createContext, useCallback, useContext, useMemo, useState, type ReactNode } from 'react';
+
+import { DEMO_USER_ID, SESSION_USER, useSession } from '@/store/session';
+
+/**
+ * What's inside the parcel. "Fragile" is deliberately absent — fragility is a
+ * handling flag (`fragile`) that can apply to any category.
+ */
+export const CATEGORIES = ['Electronics', 'Documents', 'Clothing', 'Perishables', 'Other'] as const;
+
+export type Category = (typeof CATEGORIES)[number];
+
+/**
+ * One hub per state — the state capital, or the primary commercial city where
+ * that differs. Alphabetical so a 37-item picker stays scannable.
+ */
+export const CITIES = [
+  'Abakaliki',
+  'Abeokuta',
+  'Abuja',
+  'Ado-Ekiti',
+  'Akure',
+  'Asaba',
+  'Awka',
+  'Bauchi',
+  'Benin City',
+  'Birnin Kebbi',
+  'Calabar',
+  'Damaturu',
+  'Dutse',
+  'Enugu',
+  'Gombe',
+  'Gusau',
+  'Ibadan',
+  'Ilorin',
+  'Jalingo',
+  'Jos',
+  'Kaduna',
+  'Kano',
+  'Katsina',
+  'Lafia',
+  'Lagos',
+  'Lokoja',
+  'Maiduguri',
+  'Makurdi',
+  'Minna',
+  'Osogbo',
+  'Owerri',
+  'Port Harcourt',
+  'Sokoto',
+  'Umuahia',
+  'Uyo',
+  'Yenagoa',
+  'Yola',
+] as const;
+
+export type City = (typeof CITIES)[number];
+
+export const DEFAULT_CITY: City = 'Ibadan';
+
+/**
+ * State each hub sits in. Shown in dropdown labels only — bookings store the
+ * plain city name, so this is presentation and never touches the fee engine.
+ */
+export const CITY_STATES: Record<City, string> = {
+  Umuahia: 'Abia',
+  Yola: 'Adamawa',
+  Uyo: 'Akwa Ibom',
+  Awka: 'Anambra',
+  Bauchi: 'Bauchi',
+  Yenagoa: 'Bayelsa',
+  Makurdi: 'Benue',
+  Maiduguri: 'Borno',
+  Calabar: 'Cross River',
+  Asaba: 'Delta',
+  Abakaliki: 'Ebonyi',
+  'Benin City': 'Edo',
+  'Ado-Ekiti': 'Ekiti',
+  Enugu: 'Enugu',
+  // Spelled exactly as in `NIGERIA_STATES` so a state can be mapped back to its
+  // city. 'FCT' alone looked tidier but silently broke that lookup for Abuja.
+  Abuja: 'FCT - Abuja',
+  Gombe: 'Gombe',
+  Owerri: 'Imo',
+  Dutse: 'Jigawa',
+  Kaduna: 'Kaduna',
+  Kano: 'Kano',
+  Katsina: 'Katsina',
+  'Birnin Kebbi': 'Kebbi',
+  Lokoja: 'Kogi',
+  Ilorin: 'Kwara',
+  Lagos: 'Lagos',
+  Lafia: 'Nasarawa',
+  Minna: 'Niger',
+  Abeokuta: 'Ogun',
+  Akure: 'Ondo',
+  Osogbo: 'Osun',
+  Ibadan: 'Oyo',
+  Jos: 'Plateau',
+  'Port Harcourt': 'Rivers',
+  Sokoto: 'Sokoto',
+  Jalingo: 'Taraba',
+  Damaturu: 'Yobe',
+  Gusau: 'Zamfara',
+};
+
+/**
+ * "Ibadan — Oyo". Abuja's state is stored as 'FCT - Abuja' so it matches the
+ * driver state picker exactly; shortening it here stops the label reading
+ * "Abuja — FCT - Abuja".
+ */
+export function cityHubLabel(city: City): string {
+  const state = CITY_STATES[city];
+  return `${city} — ${state === 'FCT - Abuja' ? 'FCT' : state}`;
+}
+
+/**
+ * Reverse of `CITY_STATES`. Each state has exactly one LOCI city, so a driver
+ * who registers a state of operation has an unambiguous base city — which is
+ * what the jobs feed filters on.
+ */
+const CITY_BY_STATE: Record<string, City> = Object.fromEntries(
+  (Object.entries(CITY_STATES) as [City, string][]).map(([city, state]) => [state, city]),
+);
+
+/** The city a driver registered in that state works out of, or null if unknown. */
+export function cityForState(state: string): City | null {
+  return CITY_BY_STATE[state] ?? null;
+}
+
+/**
+ * Curated neighbourhoods, where we have them. Partial by design: inventing
+ * areas for a city we don't operate in yet would put fake places in front of
+ * users. Anywhere without an entry falls back to "Other…" and a free-text box.
+ */
+export const AREAS_BY_CITY: Partial<Record<City, readonly string[]>> = {
+  Ibadan: [
+    'Bodija',
+    'Dugbe',
+    'Ring Road',
+    'Mokola',
+    'Challenge',
+    'UI/Agbowo',
+    'Iwo Road',
+    'Apata',
+    'Sango',
+    'Akobo',
+  ],
+  Lagos: ['Ikeja', 'Yaba', 'Lekki', 'Victoria Island', 'Surulere', 'Ikorodu', 'Apapa', 'Ajah'],
+  Abuja: ['Wuse II', 'Garki', 'Maitama', 'Gwarinpa', 'Asokoro', 'Kubwa', 'Lugbe'],
+  Abeokuta: ['Oke-Ilewo', 'Panseke', 'Kuto', 'Obantoko', 'Camp', 'Asero'],
+  'Port Harcourt': ['GRA Phase 2', 'D-Line', 'Rumuokoro', 'Trans-Amadi', 'Woji', 'Eliozu'],
+  Kano: ['Nassarawa', 'Sabon Gari', 'Bompai', 'Fagge', 'Tarauni'],
+  'Benin City': ['GRA', 'Ugbowo', 'Sapele Road', 'Ring Road', 'Ikpoba Hill'],
+  Enugu: ['Independence Layout', 'New Haven', 'Trans-Ekulu', 'Achara Layout', 'Uwani'],
+  Kaduna: ['Barnawa', 'Malali', 'Kawo', 'Sabon Tasha', 'Ungwan Rimi'],
+};
+
+/** Areas offered for a city, always with an "Other…" escape hatch appended. */
+export const OTHER_AREA = 'Other…';
+
+export function areasForCity(city: City): string[] {
+  return [...(AREAS_BY_CITY[city] ?? []), OTHER_AREA];
+}
+
+export type DeliveryType = 'local' | 'interstate';
+
+export const DELIVERY_TYPES: readonly DeliveryType[] = ['local', 'interstate'];
+
+export const DELIVERY_TYPE_LABELS: Record<DeliveryType, string> = {
+  local: 'Local Area',
+  interstate: 'Inter-State',
+};
+
+/** Ordered delivery stages. A booking's status implies every earlier stage is done. */
+export const BOOKING_STAGES = [
+  'Booked',
+  'Assigned',
+  'Picked Up',
+  'In Transit',
+  'Out for Delivery',
+  'Delivered',
+] as const;
+
+export type BookingStage = (typeof BOOKING_STAGES)[number];
+
+/**
+ * Where a parcel changes hands at each end of the journey.
+ *
+ * - `hub` — a LOCI partner hub (see `app/(tabs)/locations.tsx`). The sender
+ *   drops off there; at the far end the recipient collects in person. That
+ *   collection is the OTP step described in the "How LOCI Works" copy. No code
+ *   is actually generated or checked anywhere in this codebase yet, so `hub`
+ *   records intent, not an enforced handover.
+ * - `meetpoint` — an agreed public place, away from a hub but not a private
+ *   address: a filling station, a mall entrance, a campus gate. The driver is
+ *   already passing, so this carries no surcharge.
+ * - `doorstep` — a driver runs the leg to a private address, which is the one
+ *   option that costs extra. See `PRICING.doorstepSurcharge`.
+ *
+ * Only `doorstep` is chargeable. Adding a mode here without adding it to
+ * `DOORSTEP_MODES` below means it is free by default, which is the safer way
+ * round to get it wrong.
+ */
+export type HandoverMode = 'hub' | 'meetpoint' | 'doorstep';
+
+/** The modes that attract the per-leg surcharge. */
+const CHARGEABLE_MODES: readonly HandoverMode[] = ['doorstep'];
+
+export function isChargeableHandover(mode: HandoverMode | undefined): boolean {
+  return mode !== undefined && CHARGEABLE_MODES.includes(mode);
+}
+
+export type Booking = {
+  id: string;
+  trackingId: string;
+  deliveryType: DeliveryType;
+
+  /** How the parcel leaves the sender, and how it reaches the recipient. */
+  pickupMode: HandoverMode;
+  dropoffMode: HandoverMode;
+
+  /** For local deliveries, originCity and destinationCity are always the same. */
+  originCity: City;
+  destinationCity: City;
+
+  /** Neighbourhood / area within the city, e.g. "Bodija". */
+  pickupArea: string;
+  dropoffArea: string;
+
+  /** Street-level address lines. */
+  pickupAddress: string;
+  dropoffAddress: string;
+
+  /** Who physically hands the parcel over. Required by the form. */
+  pickupContactName: string;
+  senderPhone: string;
+  recipientName: string;
+  recipientPhone: string;
+
+  /** What's actually in the parcel, e.g. "Laptop charger". Shown as the job title to drivers. */
+  itemDescription: string;
+  /**
+   * Local URI of a photo of the parcel, or null. Optional, and held only in
+   * memory — there is no upload, so this does not survive a reload and is not
+   * evidence of anything until a real backend stores it.
+   */
+  itemPhotoUri: string | null;
+  category: Category;
+  weight: number;
+  /** Declared value in naira, used for the 1% insurance component of the fee. */
+  declaredValue: number;
+  /** Needs careful handling — surfaces as a warning badge to drivers. */
+  fragile: boolean;
+  notes: string;
+
+  /** Quoted fee in naira at the time of booking. */
+  estimatedFee: number;
+
+  /** Session id of whoever posted the parcel. Set by the store, not the form. */
+  senderId: string;
+
+  status: BookingStage;
+  /** Name of the driver who accepted the job, or null while it sits in the feed. */
+  driver: string | null;
+  /** Session id of that driver. Null while unclaimed — the two move together. */
+  driverId: string | null;
+  acceptedAt: string | null;
+  createdAt: string;
+};
+
+/** Fields the booking form supplies; the store fills in the rest. */
+export type NewBookingInput = Omit<
+  Booking,
+  'id' | 'trackingId' | 'status' | 'createdAt' | 'driver' | 'driverId' | 'acceptedAt' | 'senderId'
+> &
+  Partial<Pick<Booking, 'status'>>;
+
+export function stageIndex(stage: BookingStage): number {
+  return BOOKING_STAGES.indexOf(stage);
+}
+
+/**
+ * Journey progress for the compact grid card. `fraction` is 0 at Booked and 1
+ * at Delivered, so the bar fills across the whole six-stage journey rather than
+ * starting part-full.
+ */
+export function stageProgress(stage: BookingStage): {
+  step: number;
+  total: number;
+  fraction: number;
+} {
+  const index = stageIndex(stage);
+  const total = BOOKING_STAGES.length;
+  const safeIndex = index < 0 ? 0 : index;
+
+  return {
+    step: safeIndex + 1,
+    total,
+    fraction: total > 1 ? safeIndex / (total - 1) : 1,
+  };
+}
+
+/* ------------------------------------------------------------------ *
+ * Pricing
+ *
+ * Placeholder tariff — replace with server-side rates before launch.
+ * ------------------------------------------------------------------ */
+
+export const PRICING = {
+  base: { local: 1500, interstate: 4500 },
+  perKg: { local: 200, interstate: 450 },
+  /** Share of declared value charged as insurance. */
+  insuranceRate: 0.01,
+  /**
+   * Flat fee per doorstep leg. Charged once for a doorstep pickup and again for
+   * a doorstep delivery, so a door-to-door parcel pays it twice. Hub-to-hub
+   * pays nothing extra — that's the base price.
+   *
+   * This is the only optional charge left. Fragile handling is free and carries
+   * no surcharge: it's an advisory flag drivers act on, not a paid service.
+   * There is no speed tier either — a parcel moves when a driver travelling
+   * that route claims it.
+   */
+  doorstepSurcharge: 800,
+} as const;
+
+export type FeeInput = {
+  deliveryType: DeliveryType;
+  weight: number;
+  declaredValue: number;
+  /**
+   * Both default to `hub`, i.e. no doorstep fee. That keeps the headline
+   * "from ₦X" quotes — the rate calculator, the quick quote and the service
+   * catalogue — showing the cheapest honest price, which is what a "from"
+   * figure should be. The booking form passes the real modes.
+   */
+  pickupMode?: HandoverMode;
+  dropoffMode?: HandoverMode;
+};
+
+export type FeeBreakdown = {
+  base: number;
+  weight: number;
+  insurance: number;
+  /** Doorstep convenience fee, ₦0 / ₦800 / ₦1,600 depending on the two modes. */
+  doorstep: number;
+  /** How many legs that covers, so the summary can label the line honestly. */
+  doorstepLegs: number;
+  /**
+   * Rounding applied to reach a clean ₦50 figure, so the line items always sum
+   * to `total`. Never more than ₦49, and ₦0 whenever the parts already land on
+   * a multiple of 50.
+   */
+  rounding: number;
+  total: number;
+};
+
+/**
+ * base + weight + insurance, plus a flat doorstep fee per door leg, rounded up
+ * to the nearest ₦50 so quotes read cleanly. Invalid or missing numbers count
+ * as zero.
+ *
+ * Marking a parcel fragile costs nothing — it only changes how drivers are told
+ * to handle it.
+ */
+export function estimateFee(input: FeeInput): FeeBreakdown {
+  const safe = (n: number) => (Number.isFinite(n) && n > 0 ? n : 0);
+
+  const base = PRICING.base[input.deliveryType];
+  const weight = Math.round(safe(input.weight) * PRICING.perKg[input.deliveryType]);
+  const insurance = Math.round(safe(input.declaredValue) * PRICING.insuranceRate);
+
+  const doorstepLegs =
+    (isChargeableHandover(input.pickupMode) ? 1 : 0) +
+    (isChargeableHandover(input.dropoffMode) ? 1 : 0);
+  const doorstep = doorstepLegs * PRICING.doorstepSurcharge;
+
+  const subtotal = base + weight + insurance + doorstep;
+  const total = Math.ceil(subtotal / 50) * 50;
+
+  return {
+    base,
+    weight,
+    insurance,
+    doorstep,
+    doorstepLegs,
+    rounding: total - subtotal,
+    total,
+  };
+}
+
+/** ₦12,950 */
+export function formatNaira(amount: number): string {
+  return `₦${Math.round(amount).toLocaleString('en-NG')}`;
+}
+
+/**
+ * Groups a naira amount as the user types: "53635" → "53,635".
+ *
+ * Grouping is done with a regex rather than `toLocaleString`, because the
+ * latter needs a `Number` round-trip: that loses precision past 2^53 and, worse,
+ * mangles input mid-typing — a trailing "." disappears and "007" silently
+ * becomes "7" under the cursor. Working on the string keeps what the user typed.
+ *
+ * Anything that isn't a digit or a decimal point is dropped, so a paste of
+ * "₦45,000.00" cleans up to "45,000.00". Decimals are capped at two places and
+ * a lone leading "." is treated as "0.".
+ */
+export function formatAmountInput(value: string): string {
+  const cleaned = value.replace(/[^\d.]/g, '');
+  if (!cleaned) return '';
+
+  // Only the first "." counts; later ones are typos, not more decimals.
+  const firstDot = cleaned.indexOf('.');
+  const hasDecimal = firstDot !== -1;
+  const rawInteger = hasDecimal ? cleaned.slice(0, firstDot) : cleaned;
+  const decimals = hasDecimal
+    ? cleaned
+        .slice(firstDot + 1)
+        .replace(/\./g, '')
+        .slice(0, 2)
+    : '';
+
+  // Strip leading zeros but keep a single one, so "007" → "7" and "0" stays "0".
+  const integer = rawInteger.replace(/^0+(?=\d)/, '') || (hasDecimal ? '0' : '');
+  const grouped = integer.replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+
+  // Keep the trailing "." while it's still being typed.
+  return hasDecimal ? `${grouped}.${decimals}` : grouped;
+}
+
+/**
+ * The numeric value behind a formatted amount. Accepts "45,000", "45000" and
+ * "₦45,000.50" alike. Blank is 0; genuinely unparseable input is NaN, so
+ * callers can still tell the two apart.
+ */
+export function parseAmountInput(value: string): number {
+  const cleaned = value.replace(/[,\s₦]/g, '');
+  return cleaned === '' ? 0 : Number(cleaned);
+}
+
+/**
+ * What the user sees on a status badge. A parcel sitting at "Booked" with no
+ * driver reads as "Pending Driver Pickup" — clearer than the raw stage name.
+ */
+export function statusLabel(booking: Booking): string {
+  if (booking.status === 'Booked' && !booking.driver) {
+    return 'Pending Driver Pickup';
+  }
+  return booking.status;
+}
+
+/** Semantic tone for the status badge. Mirrors `Tone` in constants/theme. */
+export type StatusTone = 'primary' | 'success' | 'warning' | 'neutral';
+
+export function statusTone(booking: Booking): StatusTone {
+  switch (booking.status) {
+    case 'Delivered':
+      return 'success';
+    case 'Booked':
+      // Amber while it waits for a driver to claim it.
+      return booking.driver ? 'primary' : 'warning';
+    case 'Assigned':
+    case 'Picked Up':
+    case 'In Transit':
+    case 'Out for Delivery':
+      return 'primary';
+    default:
+      return 'neutral';
+  }
+}
+
+/** "Local: Bodija → Dugbe" / "Inter-State: Ibadan → Lagos" */
+export function routeLabel(booking: Booking): string {
+  if (booking.deliveryType === 'local') {
+    return `Local: ${booking.pickupArea} → ${booking.dropoffArea}`;
+  }
+  return `Inter-State: ${booking.originCity} → ${booking.destinationCity}`;
+}
+
+/** Formats a booking's creation date for card metadata, e.g. "3 Aug 2026". */
+export function formatBookingDate(iso: string): string {
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return '';
+  return date.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
+}
+
+/** Short route line without the type prefix, for dense list rows. */
+export function routeEndpoints(booking: Booking): string {
+  if (booking.deliveryType === 'local') {
+    return `${booking.pickupArea} → ${booking.dropoffArea}, ${booking.originCity}`;
+  }
+  return `${booking.pickupArea}, ${booking.originCity} → ${booking.dropoffArea}, ${booking.destinationCity}`;
+}
+
+let sequence = 0;
+
+function generateTrackingId(): string {
+  sequence += 1;
+  const random = Math.floor(1000 + Math.random() * 9000);
+  return `PKG-${random}${sequence.toString().padStart(2, '0')}`;
+}
+
+const SEED_BOOKINGS: Booking[] = [
+  {
+    id: 'seed-1',
+    trackingId: 'PKG-9821',
+    deliveryType: 'interstate',
+    pickupMode: 'hub',
+    dropoffMode: 'hub',
+    originCity: 'Ibadan',
+    destinationCity: 'Lagos',
+    pickupArea: 'Bodija',
+    dropoffArea: 'Ikeja',
+    pickupAddress: '12 Awolowo Avenue',
+    dropoffAddress: '45 Allen Avenue',
+    senderId: SESSION_USER.id,
+    pickupContactName: 'Sender',
+    senderPhone: '+2348011112222',
+    recipientName: 'Ada Obi',
+    recipientPhone: '+2348012345678',
+    itemDescription: 'Laptop charger and cables',
+    itemPhotoUri: null,
+    category: 'Electronics',
+    weight: 2.5,
+    declaredValue: 45000,
+    fragile: false,
+    notes: 'Call on arrival.',
+    estimatedFee: 9500,
+    status: 'In Transit',
+    driver: 'Segun A.',
+    driverId: 'driver-segun',
+    acceptedAt: '2026-08-01T10:10:00.000Z',
+    createdAt: '2026-08-01T09:30:00.000Z',
+  },
+  {
+    id: 'seed-2',
+    trackingId: 'PKG-4410',
+    deliveryType: 'local',
+    pickupMode: 'doorstep',
+    dropoffMode: 'doorstep',
+    originCity: 'Ibadan',
+    destinationCity: 'Ibadan',
+    pickupArea: 'Dugbe',
+    dropoffArea: 'Mokola',
+    pickupAddress: '8 Lebanon Street',
+    dropoffAddress: '17 Oyo Road',
+    senderId: 'user-ngozi',
+    pickupContactName: 'Sender',
+    senderPhone: '+2348033334444',
+    recipientName: 'Tunde Bakare',
+    recipientPhone: '+2348090001122',
+    itemDescription: 'Signed contract documents',
+    itemPhotoUri: null,
+    category: 'Documents',
+    weight: 0.4,
+    declaredValue: 0,
+    fragile: false,
+    notes: '',
+    estimatedFee: 1600,
+    status: 'Out for Delivery',
+    driver: SESSION_USER.name,
+    driverId: SESSION_USER.id,
+    acceptedAt: '2026-07-31T14:40:00.000Z',
+    createdAt: '2026-07-31T14:05:00.000Z',
+  },
+  {
+    id: 'seed-3',
+    trackingId: 'PKG-7305',
+    deliveryType: 'interstate',
+    pickupMode: 'hub',
+    dropoffMode: 'doorstep',
+    originCity: 'Port Harcourt',
+    destinationCity: 'Kano',
+    pickupArea: 'GRA Phase 2',
+    dropoffArea: 'Nassarawa',
+    pickupAddress: '3 Aba Road',
+    dropoffAddress: '90 Zoo Road',
+    senderId: 'user-ada',
+    pickupContactName: 'Sender',
+    senderPhone: '+2348055556666',
+    recipientName: 'Fatima Yusuf',
+    recipientPhone: '+2347033445566',
+    itemDescription: 'Office chair, boxed',
+    itemPhotoUri: null,
+    category: 'Other',
+    weight: 14,
+    declaredValue: 85000,
+    fragile: false,
+    notes: 'Leave with the security desk.',
+    estimatedFee: 11700,
+    status: 'Delivered',
+    driver: 'Musa I.',
+    driverId: 'driver-musa',
+    acceptedAt: '2026-07-28T09:00:00.000Z',
+    createdAt: '2026-07-28T08:15:00.000Z',
+  },
+  {
+    id: 'seed-4',
+    trackingId: 'PKG-2288',
+    deliveryType: 'local',
+    pickupMode: 'doorstep',
+    dropoffMode: 'hub',
+    originCity: 'Ibadan',
+    destinationCity: 'Ibadan',
+    pickupArea: 'Challenge',
+    dropoffArea: 'Ring Road',
+    pickupAddress: '22 Lagos Bypass',
+    dropoffAddress: '5 Adeoyo Street',
+    senderId: SESSION_USER.id,
+    pickupContactName: 'Sender',
+    senderPhone: '+2348077778888',
+    recipientName: 'Bisi Adeyemi',
+    recipientPhone: '+2348123456789',
+    itemDescription: 'Set of drinking glasses',
+    itemPhotoUri: null,
+    category: 'Other',
+    weight: 1.2,
+    declaredValue: 18000,
+    fragile: true,
+    notes: 'Glassware — do not stack.',
+    estimatedFee: 4400,
+    status: 'Booked',
+    driver: null,
+    driverId: null,
+    acceptedAt: null,
+    createdAt: '2026-08-03T07:45:00.000Z',
+  },
+  {
+    id: 'seed-5',
+    trackingId: 'PKG-6153',
+    deliveryType: 'interstate',
+    pickupMode: 'hub',
+    dropoffMode: 'hub',
+    originCity: 'Ibadan',
+    destinationCity: 'Abuja',
+    pickupArea: 'Mokola',
+    dropoffArea: 'Wuse II',
+    pickupAddress: '31 Queen Elizabeth Road',
+    dropoffAddress: '14 Aminu Kano Crescent',
+    senderId: 'user-tunde',
+    pickupContactName: 'Sender',
+    senderPhone: '+2348099990000',
+    recipientName: 'Emeka Nwosu',
+    recipientPhone: '+2348134567890',
+    itemDescription: 'Textbooks and stationery',
+    itemPhotoUri: null,
+    category: 'Other',
+    weight: 5.8,
+    declaredValue: 30000,
+    fragile: false,
+    notes: '',
+    estimatedFee: 10900,
+    status: 'Booked',
+    driver: null,
+    driverId: null,
+    acceptedAt: null,
+    createdAt: '2026-08-03T06:20:00.000Z',
+  },
+];
+
+type BookingsContextValue = {
+  bookings: Booking[];
+  addBooking: (input: NewBookingInput) => Booking;
+  acceptBooking: (id: string, driver?: string, driverId?: string) => void;
+  getBooking: (trackingId: string) => Booking | undefined;
+};
+
+const BookingsContext = createContext<BookingsContextValue | null>(null);
+
+export function BookingsProvider({ children }: { children: ReactNode }) {
+  const [bookings, setBookings] = useState<Booking[]>(SEED_BOOKINGS);
+  // Ownership is stamped here rather than by the form, so no screen can post a
+  // parcel on someone else's behalf.
+  const { user } = useSession();
+
+  const addBooking = useCallback(
+    (input: NewBookingInput) => {
+      const booking: Booking = {
+        ...input,
+        id: `booking-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+        trackingId: generateTrackingId(),
+        // Non-null: posting a parcel is gated behind sign-in, so reaching here
+        // without a user would be a routing bug. The fallback keeps the demo
+        // seed identity rather than writing an empty owner.
+        senderId: user?.id ?? DEMO_USER_ID,
+        status: input.status ?? 'Booked',
+        driver: null,
+        driverId: null,
+        acceptedAt: null,
+        createdAt: new Date().toISOString(),
+      };
+
+      // Newest first, so a fresh booking lands at the top of the tracking list.
+      setBookings((prev) => [booking, ...prev]);
+      return booking;
+    },
+    [user?.id],
+  );
+
+  const acceptBooking = useCallback(
+    (id: string, driver: string = user?.name ?? 'Driver', driverId: string = user?.id ?? '') => {
+      setBookings((prev) =>
+        prev.map((booking) =>
+          booking.id === id && !booking.driver
+            ? {
+                ...booking,
+                driver,
+                driverId,
+                acceptedAt: new Date().toISOString(),
+                status: 'Assigned',
+              }
+            : booking,
+        ),
+      );
+    },
+    [user?.id, user?.name],
+  );
+
+  const getBooking = useCallback(
+    (trackingId: string) =>
+      bookings.find((booking) => booking.trackingId.toLowerCase() === trackingId.toLowerCase()),
+    [bookings],
+  );
+
+  const value = useMemo(
+    () => ({ bookings, addBooking, acceptBooking, getBooking }),
+    [bookings, addBooking, acceptBooking, getBooking],
+  );
+
+  return <BookingsContext.Provider value={value}>{children}</BookingsContext.Provider>;
+}
+
+export function useBookings(): BookingsContextValue {
+  const context = useContext(BookingsContext);
+
+  if (!context) {
+    throw new Error('useBookings must be used within a BookingsProvider');
+  }
+
+  return context;
+}
+
+/** Case-insensitive match across tracking ID, recipient, cities, areas, and addresses. */
+export function filterBookings(bookings: Booking[], query: string): Booking[] {
+  const term = query.trim().toLowerCase();
+
+  if (!term) {
+    return bookings;
+  }
+
+  return bookings.filter((booking) =>
+    [
+      booking.trackingId,
+      booking.itemDescription,
+      booking.recipientName,
+      booking.originCity,
+      booking.destinationCity,
+      booking.pickupArea,
+      booking.dropoffArea,
+      booking.pickupAddress,
+      booking.dropoffAddress,
+    ]
+      .join(' ')
+      .toLowerCase()
+      .includes(term),
+  );
+}
+
+/**
+ * Waiting for a driver to accept it. This is the state that needs the user's
+ * attention, so it sorts first and gets the pulsing highlight.
+ *
+ * Note it's derived, not a raw status: the stored status is 'Booked', and what
+ * makes it pending is that no driver has claimed it.
+ */
+export function isPendingPickup(booking: Booking): boolean {
+  return booking.status === 'Booked' && !booking.driver;
+}
+
+/** Lower sorts higher. Pending first, delivered last. */
+function pickupPriority(booking: Booking): number {
+  if (isPendingPickup(booking)) return 0;
+
+  switch (booking.status) {
+    case 'Out for Delivery':
+      return 1;
+    case 'In Transit':
+      return 2;
+    case 'Picked Up':
+      return 3;
+    case 'Assigned':
+      return 4;
+    case 'Booked':
+      return 5;
+    case 'Delivered':
+      return 6;
+    default:
+      return 5;
+  }
+}
+
+/**
+ * Orders parcels by how much they need attention. Ties break newest-first so
+ * the sort is stable and predictable rather than dependent on insertion order.
+ */
+export function sortByPickupUrgency(bookings: Booking[]): Booking[] {
+  return [...bookings].sort((a, b) => {
+    const delta = pickupPriority(a) - pickupPriority(b);
+    if (delta !== 0) return delta;
+    return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+  });
+}
+
+/**
+ * Short description of the job shape for the driver feed — "Hub → Hub",
+ * "Hub → Door" and so on. This replaced the delivery-speed metric, which no
+ * longer exists: what a driver needs to know is how many door legs the job
+ * involves, since that's what costs them time.
+ */
+/**
+ * The words the booking form uses for each mode. Kept here so the form, the
+ * confirmation screen and the driver feed can't describe the same parcel three
+ * different ways — "Door → Meet" meant nothing to a sender who chose
+ * "Public location pickup".
+ */
+export function handoverModeLabel(mode: HandoverMode, end: 'pickup' | 'dropoff'): string {
+  if (mode === 'hub') return end === 'pickup' ? 'LOCI hub' : 'LOCI hub (OTP collection)';
+  if (mode === 'meetpoint') return 'Public location';
+  return end === 'pickup' ? 'Public location pickup' : 'Home/office drop-off';
+}
+
+/** "Public location pickup · 56 dun dolly do, danladi, Abakaliki" */
+export function pickupSummaryLine(args: {
+  mode: HandoverMode;
+  address: string;
+  area: string;
+  city: string;
+}): string {
+  const where = [args.address.trim(), args.area, args.city].filter(Boolean).join(', ');
+  return `${handoverModeLabel(args.mode, 'pickup')} · ${where || args.city}`;
+}
+
+/** "LOCI hub (OTP collection) · jalingo, Abakaliki" */
+export function dropoffSummaryLine(args: {
+  mode: HandoverMode;
+  address: string;
+  area: string;
+  city: string;
+}): string {
+  const where = [args.address.trim(), args.area, args.city].filter(Boolean).join(', ');
+  return `${handoverModeLabel(args.mode, 'dropoff')} · ${where || args.city}`;
+}
+
+export function handoverLabel(booking: Booking): string {
+  const end = (mode: HandoverMode) =>
+    mode === 'hub' ? 'Hub' : mode === 'meetpoint' ? 'Meet' : 'Door';
+  return `${end(booking.pickupMode)} → ${end(booking.dropoffMode)}`;
+}
+
+/**
+ * Human-readable pickup expectation, derived rather than stored.
+ *
+ * There are no speed tiers: a parcel moves when a driver already travelling
+ * that route claims it, so the honest answer depends on how far it's going and
+ * whether someone has to come to the door. Replace with a real `pickupBy`
+ * timestamp when the backend can set one.
+ */
+export function pickupWindow(booking: Booking): string {
+  if (booking.pickupMode === 'hub') {
+    return 'Drop off at your hub any time it is open';
+  }
+
+  // Phrased with the same words the form used, so the sender recognises it.
+  const where = handoverModeLabel(booking.pickupMode, 'pickup');
+  const window = booking.deliveryType === 'local' ? '24 hours' : '48 hours';
+  return `${where} within ${window}`;
+}
+
+/** Rough parcel size band, shown to drivers alongside the category. */
+export function sizeBand(booking: Booking): string {
+  if (booking.weight <= 1) return 'Envelope';
+  if (booking.weight <= 5) return 'Small box';
+  if (booking.weight <= 20) return 'Medium box';
+  return 'Large / freight';
+}
+
+/**
+ * Unassigned parcels on a specific route. Either end accepts 'all', so a driver
+ * can browse everything leaving a city without fixing the destination.
+ */
+export function bookingsOnRoute(
+  bookings: Booking[],
+  originCity: City | 'all',
+  destinationCity: City | 'all',
+): Booking[] {
+  return bookings.filter(
+    (b) =>
+      !b.driver &&
+      (originCity === 'all' || b.originCity === originCity) &&
+      (destinationCity === 'all' || b.destinationCity === destinationCity),
+  );
+}
+
+/** Name the signed-in user drives under. Stand-in until driver auth exists. */
+export const CURRENT_DRIVER = SESSION_USER.name;
+
+/**
+ * Parcels this user is party to — ones they posted, plus ones they're driving.
+ * Everything else, including other people's unclaimed jobs, is deliberately
+ * absent: those belong to the Available Jobs feed, not to a personal list.
+ */
+export function parcelsForUser(bookings: Booking[], userId: string): Booking[] {
+  return bookings.filter((booking) => booking.senderId === userId || booking.driverId === userId);
+}
+
+/** True when the user posted this parcel. */
+export function isSender(booking: Booking, userId: string): boolean {
+  return booking.senderId === userId;
+}
+
+/** True when the user is the driver carrying it. */
+export function isCarrier(booking: Booking, userId: string): boolean {
+  return booking.driverId === userId;
+}
+
+export type ActiveRole = 'driver' | 'sender';
+
+export type ActiveMovement = {
+  id: string;
+  trackingId: string;
+  role: ActiveRole;
+  /** Where it's headed, e.g. "Bodija Market, Ibadan". */
+  destination: string;
+  /** Who receives it — what the ticker names in both roles. */
+  recipientName: string;
+  /** Who's carrying it, or null while the job is still unclaimed. */
+  driverName: string | null;
+};
+
+/**
+ * Parcels currently moving, split by the user's role. A parcel you accepted as
+ * a driver reads "Delivering to"; one you posted reads "On the way to". Someone
+ * doing both gets an entry in each list.
+ */
+export function activeMovements(
+  bookings: Booking[],
+  userId: string = SESSION_USER.id,
+): ActiveMovement[] {
+  return parcelsForUser(bookings, userId)
+    .filter((b) => b.status !== 'Delivered')
+    .map((b) => ({
+      id: b.id,
+      trackingId: b.trackingId,
+      role: (b.driverId === userId ? 'driver' : 'sender') as ActiveRole,
+      destination: `${b.dropoffArea}, ${b.destinationCity}`,
+      recipientName: b.recipientName,
+      driverName: b.driver,
+    }));
+}
+
+/**
+ * Jobs still waiting for a driver, optionally narrowed by route type and origin city.
+ * A job is "available" when no driver has accepted it yet.
+ */
+export function availableBookings(
+  bookings: Booking[],
+  deliveryType: DeliveryType | 'all',
+  originCity: City | 'all' = 'all',
+): Booking[] {
+  return bookings.filter(
+    (booking) =>
+      !booking.driver &&
+      (deliveryType === 'all' || booking.deliveryType === deliveryType) &&
+      (originCity === 'all' || booking.originCity === originCity),
+  );
+}

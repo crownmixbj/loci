@@ -1,56 +1,106 @@
-# Welcome to your Expo app 👋
+# LOCI
 
-This is an [Expo](https://expo.dev) project created with [`create-expo-app`](https://www.npmjs.com/package/create-expo-app).
+Parcel delivery across Nigeria — senders post parcels, drivers claim them.
 
-## Get started
+Built with Expo SDK 56, React Native 0.85, expo-router and TypeScript. The same
+codebase targets iOS, Android and the web.
 
-1. Install dependencies
+---
 
-   ```bash
-   npm install
-   ```
-
-2. Start the app
-
-   ```bash
-   npx expo start
-   ```
-
-In the output, you'll find options to open the app in a
-
-- [development build](https://docs.expo.dev/develop/development-builds/introduction/)
-- [Android emulator](https://docs.expo.dev/workflow/android-studio-emulator/)
-- [iOS simulator](https://docs.expo.dev/workflow/ios-simulator/)
-- [Expo Go](https://expo.dev/go), a limited sandbox for trying out app development with Expo
-
-You can start developing by editing the files inside the **app** directory. This project uses [file-based routing](https://docs.expo.dev/router/introduction).
-
-## Get a fresh project
-
-When you're ready, run:
+## Running locally
 
 ```bash
-npm run reset-project
+npm install
+cp .env.example .env.local   # then paste your Supabase values
+npx expo start -c
 ```
 
-This command will move the starter code to the **app-example** directory and create a blank **app** directory where you can start developing.
+The `-c` clears the Metro cache. Expo reads `.env*` files **only at bundler
+startup**, so after changing one you must restart the dev server — a hot reload
+won't pick it up.
 
-### Other setup steps
+## Environment
 
-- To set up ESLint for linting, run `npx expo lint`, or follow our guide on ["Using ESLint and Prettier"](https://docs.expo.dev/guides/using-eslint/)
-- If you'd like to set up unit testing, follow our guide on ["Unit Testing with Jest"](https://docs.expo.dev/develop/unit-testing/)
-- Learn more about the TypeScript setup in this template in our guide on ["Using TypeScript"](https://docs.expo.dev/guides/typescript/)
+| Variable                        | Where to find it                              |
+| ------------------------------- | --------------------------------------------- |
+| `EXPO_PUBLIC_SUPABASE_URL`      | Supabase dashboard → Project Settings → API   |
+| `EXPO_PUBLIC_SUPABASE_ANON_KEY` | Same page — the **publishable / anon** key     |
 
-## Learn more
+Anything prefixed `EXPO_PUBLIC_` is compiled into the app bundle and is readable
+by anyone who installs the app. That is correct for the anon key, which is
+designed to be public — Row Level Security on your tables is what protects the
+data, not the secrecy of this key.
 
-To learn more about developing your project with Expo, look at the following resources:
+**Never put the `service_role` / `sb_secret_` key in this project.**
 
-- [Expo documentation](https://docs.expo.dev/): Learn fundamentals, or go into advanced topics with our [guides](https://docs.expo.dev/guides).
-- [Learn Expo tutorial](https://docs.expo.dev/tutorial/introduction/): Follow a step-by-step tutorial where you'll create a project that runs on Android, iOS, and the web.
+`.env` and `.env.*` are git-ignored; only `.env.example` is committed.
 
-## Join the community
+## Supabase setup
 
-Join our community of developers creating universal apps.
+In the Supabase dashboard:
 
-- [Expo on GitHub](https://github.com/expo/expo): View our open source platform and contribute.
-- [Discord community](https://chat.expo.dev): Chat with Expo users and ask questions.
+- **Authentication → Sign In / Providers → Email** — enabled.
+- **Authentication → URL Configuration → Redirect URLs** — add your dev origin
+  (`http://localhost:8081`) and your deployed origin, or confirmation links will
+  bounce somewhere unhelpful.
+- **Authentication → Emails → SMTP Settings** — the built-in mailer only sends to
+  members of your own Supabase organisation, and only **2 emails per hour across
+  the whole project**. Add a provider (Resend, Postmark, SendGrid) before real
+  users, or turn off "Confirm email" while developing.
+
+## Checks
+
+```bash
+npm run typecheck   # tsc --noEmit --noUnusedLocals
+npm run lint
+npm run build:web   # produces dist/ — run this before pushing a deploy
+```
+
+---
+
+## Deploying to Cloudflare Pages
+
+Connect the GitHub repo, then use these settings:
+
+| Setting                | Value                        |
+| ---------------------- | ---------------------------- |
+| Framework preset       | **None**                     |
+| Build command          | `npm run build:web`          |
+| Build output directory | `dist`                       |
+| Node version           | `22` (also set in `.nvmrc`)  |
+
+Add both `EXPO_PUBLIC_` variables under **Settings → Environment variables**, for
+Production *and* Preview. They are not in the repo, so the build will produce an
+app that reports "accounts are not configured" without them.
+
+### Why `public/_redirects` exists
+
+`app.json` sets `web.output: "static"`, so Expo pre-renders one HTML file per
+known route. Dynamic routes can't be pre-rendered — there's no way to know every
+parcel id at build time — so `/parcel/abc123` has no file and Pages would answer
+404. The `_redirects` rule rewrites unmatched paths to `index.html` with a 200,
+which keeps the URL intact so expo-router can read the id from it. Cloudflare
+serves real files first, so the pre-rendered pages are unaffected.
+
+### After the first deploy
+
+Add the Pages URL to Supabase's **Redirect URLs**, or email confirmation and
+password reset links will fail in production.
+
+---
+
+## Notes on the current state
+
+- **Bookings are in-memory.** The parcel store is a React context seeded with
+  sample data; nothing is persisted between reloads. Auth is real, the parcel
+  data is not.
+- **Access control is client-side.** Posting a parcel, applying to drive and
+  accepting a job all require an account, but that's enforced in the UI. When
+  bookings move into Supabase tables, Row Level Security is what will actually
+  enforce it.
+- **Uploads aren't uploaded.** Parcel photos and driver documents are local file
+  URIs; no storage bucket is wired up.
+- **Notifications are queued, not sent.** `store/notifications.tsx` composes the
+  driver's confirmation email and SMS and records them. Delivery needs a
+  server-side sender — a client cannot hold provider credentials.
+- **OTP collection** is described in the hub copy but not implemented.

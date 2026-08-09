@@ -1,9 +1,26 @@
 :root {
   --font-display:
-    Spline Sans, Inter, ui-sans-serif, system-ui, sans-serif, Apple Color Emoji, Segoe UI Emoji,
-    Segoe UI Symbol, Noto Color Emoji;
+    'Plus Jakarta Sans', 'Inter', system-ui, sans-serif;
   --font-mono:
     ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, Liberation Mono, Courier New, monospace;
-  --font-rounded: 'SF Pro Rounded', 'Hiragino Maru Gothic ProN', Meiryo, 'MS PGothic', sans-serif;
-  --font-serif: Georgia, 'Times New Roman', serif;
+}
+
+body {
+  font-family: var(--font-display);
+}
+
+/*
+ * Kill the browser's focus ring on text inputs.
+ *
+ * react-native-web doesn't reliably map RN's `outlineWidth` / `outlineStyle`
+ * to CSS, so setting them in a StyleSheet leaves the UA ring in place — it
+ * renders as a hard-edged rectangle inside our rounded field. Focus is
+ * communicated by the container's border instead.
+ */
+input:focus,
+input:focus-visible,
+textarea:focus,
+textarea:focus-visible {
+  outline: none;
+  box-shadow: none;
 }
