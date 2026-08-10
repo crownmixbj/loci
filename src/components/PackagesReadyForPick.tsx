@@ -4,6 +4,8 @@ import { Pressable, StyleSheet, Text, useWindowDimensions, View } from 'react-na
 
 import { showDialog } from '@/components/ui/dialog';
 import { useAuthGate } from '@/hooks/use-auth-gate';
+import { useSession } from '@/store/session';
+import { useDriverEligibility, type DriverEligibility } from '@/hooks/use-driver-eligibility';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
@@ -36,6 +38,8 @@ export function PackagesReadyForPick({ onSeeAll, limit = 4 }: PackagesReadyForPi
   const theme = useTheme();
   const { bookings, acceptBooking } = useBookings();
   const { requireAuth } = useAuthGate();
+  const { isApprovedDriver } = useSession();
+  const eligibility = useDriverEligibility();
 
   // md breakpoint: two across needs room, below this the grid drops to one column.
   const { width } = useWindowDimensions();
@@ -47,11 +51,24 @@ export function PackagesReadyForPick({ onSeeAll, limit = 4 }: PackagesReadyForPi
 
   const handleClaim = (booking: Booking) => {
     // Same rule as the Find Jobs feed: claiming writes to someone else's parcel.
-    requireAuth(() => confirmClaim(booking), {
-      title: 'Sign in to claim jobs',
-      reason: `Claiming puts this delivery on your account, and the sender needs to know who is collecting it.\n\n${booking.itemDescription} · ${formatNaira(booking.estimatedFee)} payout`,
-      next: '/',
-    });
+    requireAuth(
+      () => {
+        // Same rule as Find Jobs; the server refuses either way.
+        if (!isApprovedDriver) {
+          showDialog(
+            'Approved drivers only',
+            'Claiming a parcel needs an approved driver application. Apply on the Drivers page — reviews take up to 7 working days.',
+          );
+          return;
+        }
+        confirmClaim(booking);
+      },
+      {
+        title: 'Sign in to claim jobs',
+        reason: `Claiming puts this delivery on your account, and the sender needs to know who is collecting it.\n\n${booking.itemDescription} · ${formatNaira(booking.estimatedFee)} payout`,
+        next: '/',
+      },
+    );
   };
 
   const confirmClaim = (booking: Booking) => {
@@ -97,7 +114,11 @@ export function PackagesReadyForPick({ onSeeAll, limit = 4 }: PackagesReadyForPi
               <View
                 key={booking.id}
                 style={[styles.gridCell, twoUp ? styles.gridCellHalf : styles.gridCellFull]}>
-                <ClaimCard booking={booking} onClaim={() => handleClaim(booking)} />
+                <ClaimCard
+                  booking={booking}
+                  eligibility={eligibility}
+                  onClaim={() => handleClaim(booking)}
+                />
               </View>
             ))}
           </View>
@@ -115,7 +136,15 @@ export function PackagesReadyForPick({ onSeeAll, limit = 4 }: PackagesReadyForPi
   );
 }
 
-function ClaimCard({ booking, onClaim }: { booking: Booking; onClaim: () => void }) {
+function ClaimCard({
+  booking,
+  eligibility,
+  onClaim,
+}: {
+  booking: Booking;
+  eligibility: DriverEligibility;
+  onClaim: () => void;
+}) {
   const theme = useTheme();
   const isLocal = booking.deliveryType === 'local';
 
@@ -167,14 +196,27 @@ function ClaimCard({ booking, onClaim }: { booking: Booking; onClaim: () => void
       <Button
         label="CLAIM NOW"
         size="md"
+        disabled={!eligibility.canAccept}
         icon={(color, size) => <HandGrab color={color} size={size} />}
         onPress={onClaim}
+        accessibilityLabel={
+          eligibility.canAccept ? 'Claim now' : `Claim now, unavailable. ${eligibility.reason}`
+        }
       />
+
+      {/* The button can't be tapped, so the reason is stated rather than hidden. */}
+      {!eligibility.canAccept && !!eligibility.reason && (
+        <Text style={[styles.blockedText, { color: theme.textMuted }]}>{eligibility.reason}</Text>
+      )}
     </Card>
   );
 }
 
 const styles = StyleSheet.create({
+  blockedText: {
+    ...Typography.caption,
+    textAlign: 'center',
+  },
   section: {
     marginBottom: Spacing.five,
   },

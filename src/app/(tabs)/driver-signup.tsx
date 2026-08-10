@@ -26,7 +26,7 @@ import {
   UserCheck,
   UserRound,
 } from 'lucide-react-native';
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   KeyboardAvoidingView,
@@ -67,7 +67,16 @@ import {
 import { DEFAULT_STATE, NIGERIA_STATES, type NigeriaState } from '@/constants/nigeriaStates';
 import { cityForState } from '@/store/bookings';
 import { useSession } from '@/store/session';
+import {
+  submitApplication as insertApplication,
+  STATUS_LABELS,
+  workingDaysSince,
+  REVIEW_WORKING_DAYS,
+} from '@/store/driver-applications';
+import { isSupabaseConfigured } from '@/lib/supabase';
+import { uploadDocument } from '@/store/driver-documents';
 import { useAuthGate } from '@/hooks/use-auth-gate';
+import { useFormDraft } from '@/hooks/use-form-draft';
 
 const VEHICLE_TYPES = ['Motorcycle', 'Car', 'Van', 'Truck'] as const;
 type VehicleType = (typeof VEHICLE_TYPES)[number];
@@ -317,11 +326,48 @@ function generateReference(): string {
 export default function DriverSignupScreen() {
   const theme = useTheme();
   const router = useRouter();
-  const { registerDriver } = useSession();
+  const { registerDriver, user, refreshDriverStatus, application } = useSession();
   const { requireAuth, isAuthenticated } = useAuthGate();
 
   const [form, setForm] = useState<SignupForm>(INITIAL_FORM);
   const [documents, setDocuments] = useState<Record<DocumentKey, AttachedDocument>>(NO_DOCUMENTS);
+
+  /*
+   * The answers outlive this component.
+   *
+   * Asking for an account at submit means the app navigates away mid-form, and
+   * `useState` doesn't survive that — sign-in ends with `router.replace`, which
+   * mounts a fresh screen, and signing up leaves the app entirely for an email
+   * confirmation. Without this, a 30-field application vanishes at the last
+   * step, which is exactly when it hurts most.
+   */
+  const {
+    draft,
+    ready: draftReady,
+    save: saveDraft,
+    clear: clearDraft,
+  } = useFormDraft<{
+    form: SignupForm;
+    documents: Record<DocumentKey, AttachedDocument>;
+  }>('loci.draft.driver-application');
+
+  const restored = useRef(false);
+
+  useEffect(() => {
+    if (!draftReady || restored.current || !draft) return;
+    restored.current = true;
+    setForm(draft.form);
+    // Local file URIs can expire between sessions. Restoring them anyway is
+    // right: the upload reports "attach it again" if one has gone stale, which
+    // beats silently dropping five attachments.
+    setDocuments(draft.documents ?? NO_DOCUMENTS);
+  }, [draftReady, draft]);
+
+  useEffect(() => {
+    // Don't write the empty initial state over a draft still being read.
+    if (!draftReady) return;
+    saveDraft({ form, documents });
+  }, [draftReady, form, documents, saveDraft]);
   const [errors, setErrors] = useState<FieldErrors>({});
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isSubmitted, setIsSubmitted] = useState(false);
@@ -464,7 +510,7 @@ export default function DriverSignupScreen() {
      * Here the application is already complete and the state survives the trip
      * to sign-in, because this screen stays mounted underneath.
      */
-    requireAuth(submitApplication, {
+    requireAuth(() => void submitApplication(), {
       title: 'Sign in to submit your application',
       reason:
         'Your application is tied to an account: it is how we tell you the outcome, and how you get into the driver dashboard once approved. Nothing you have typed will be lost.',
@@ -473,27 +519,113 @@ export default function DriverSignupScreen() {
   };
 
   /** Runs only once we know whose application this is. */
-  const submitApplication = () => {
+  const submitApplication = async () => {
+    if (!user) return;
+
     setIsSubmitting(true);
-    // Stand-in for a network round trip — no API is called.
-    setTimeout(() => {
-      const ref = generateReference();
+    const ref = generateReference();
 
-      // The rest of the application is still discarded, but the location has to
-      // survive: Find Jobs matches on it. `baseCity` is resolved here, once, so
-      // every reader gets the same answer instead of re-deriving it.
-      registerDriver({
-        state: form.state,
-        baseCity: cityForState(form.state),
-        address: form.address.trim(),
-        reference: ref,
-        submittedAt: new Date().toISOString(),
-      });
+    /*
+     * The whole application now goes to the database. It used to be discarded
+     * on submit apart from the location, which meant a reviewer had nothing to
+     * review and an applicant had no record they had ever applied.
+     */
+    if (isSupabaseConfigured) {
+      /*
+       * Upload the documents BEFORE creating the application row.
+       *
+       * The other order would leave a reviewer with an application whose
+       * evidence silently failed to arrive — worse than no application at all,
+       * because it looks complete. If any upload fails we stop here with the
+       * form intact and nothing written.
+       */
+      const uploaded: Record<string, string | null> = {};
 
-      setReference(ref);
-      setIsSubmitting(false);
-      setIsSubmitted(true);
-    }, 1000);
+      for (const doc of DOCUMENTS) {
+        const attached = documents[doc.key];
+        if (!attached) continue;
+
+        const result = await uploadDocument({
+          userId: user.id,
+          key: doc.key,
+          fileName: attached.fileName,
+          uri: attached.uri,
+        });
+
+        if (!result.ok) {
+          setIsSubmitting(false);
+          showDialog(
+            `Could not upload ${doc.label}`,
+            `${result.error}\n\nNothing has been submitted — your answers and other files are still here.`,
+          );
+          return;
+        }
+
+        uploaded[doc.key] = result.path;
+      }
+
+      try {
+        await insertApplication({
+          userId: user.id,
+          reference: ref,
+          fullName: form.fullName.trim(),
+          phone: form.phone.trim(),
+          email: form.email.trim().toLowerCase(),
+          nin: form.nin.trim(),
+          address: form.address.trim(),
+          state: form.state,
+          baseCity: cityForState(form.state),
+          vehicleType: form.vehicleType,
+          plateNumber: form.plateNumber.trim().toUpperCase(),
+          licenseId: form.licenseId.trim(),
+          guarantorName: form.guarantorName.trim(),
+          guarantorPhone: form.guarantorPhone.trim(),
+          guarantorRelationship: form.guarantorRelationship,
+          guarantorAddress: form.guarantorAddress.trim(),
+          guarantorNin: form.guarantorNin.trim(),
+          bankName: form.bankName,
+          accountNumber: form.accountNumber.trim(),
+          accountName: form.accountName.trim(),
+          kinName: form.kinName.trim(),
+          kinPhone: form.kinPhone.trim(),
+          kinRelationship: form.kinRelationship,
+          // Storage paths now, not filenames — a reviewer can open these.
+          documents: uploaded,
+        });
+      } catch (thrown) {
+        setIsSubmitting(false);
+
+        const message = thrown instanceof Error ? thrown.message : 'Something went wrong.';
+        // The unique constraint is the common case and deserves its own words.
+        showDialog(
+          /duplicate key|one_open_application/i.test(message)
+            ? 'You already have an application'
+            : 'Could not submit your application',
+          /duplicate key|one_open_application/i.test(message)
+            ? 'There is already an application on this account. Check its status on the Drivers screen.'
+            : `${message}\n\nYour answers are still here — try again.`,
+        );
+        return;
+      }
+
+      await refreshDriverStatus();
+    }
+
+    // Kept for the jobs feed, which reads the base city from the session.
+    registerDriver({
+      state: form.state,
+      baseCity: cityForState(form.state),
+      address: form.address.trim(),
+      reference: ref,
+      submittedAt: new Date().toISOString(),
+    });
+
+    // Submitted and stored — the draft has done its job.
+    await clearDraft();
+
+    setReference(ref);
+    setIsSubmitting(false);
+    setIsSubmitted(true);
   };
 
   /**
@@ -501,6 +633,7 @@ export default function DriverSignupScreen() {
    * the back gesture can't return to a submitted application.
    */
   const goToDashboard = () => {
+    void clearDraft();
     setForm(INITIAL_FORM);
     setDocuments(NO_DOCUMENTS);
     setErrors({});
@@ -531,6 +664,57 @@ export default function DriverSignupScreen() {
           </View>
 
           {/*
+            Live status.
+            
+            An applicant is waiting up to seven working days, so the state has
+            to be visible whenever they open the app — not only in the toast
+            that fires the moment an admin decides. The toast is the interrupt;
+            this is the record.
+          */}
+          {application && (
+            <View
+              style={[
+                styles.liveStatusCard,
+                {
+                  backgroundColor:
+                    application.status === 'approved'
+                      ? theme.successSoft
+                      : application.status === 'rejected'
+                        ? theme.dangerSoft
+                        : theme.warningSoft,
+                },
+              ]}>
+              <View style={styles.liveStatusHeader}>
+                <Text
+                  style={[
+                    styles.liveStatusTitle,
+                    {
+                      color:
+                        application.status === 'approved'
+                          ? theme.successOnSoft
+                          : application.status === 'rejected'
+                            ? theme.dangerOnSoft
+                            : theme.warningOnSoft,
+                    },
+                  ]}>
+                  {STATUS_LABELS[application.status]}
+                </Text>
+                <Text style={[styles.liveStatusRef, { color: theme.textSecondary }]}>
+                  {application.reference}
+                </Text>
+              </View>
+
+              <Text style={[styles.liveStatusBody, { color: theme.textSecondary }]}>
+                {application.status === 'approved'
+                  ? 'You can accept delivery jobs. Find Jobs is open to you.'
+                  : application.status === 'rejected'
+                    ? 'This application was not approved. Contact support if you think that is wrong.'
+                    : `Submitted ${workingDaysSince(application.submittedAt)} working day(s) ago. Reviews take up to ${REVIEW_WORKING_DAYS}.`}
+              </Text>
+            </View>
+          )}
+
+          {/*
             Said up front rather than sprung at submit. Someone who knows an
             account is needed can create one before filling in a bank account
             number and a guarantor's NIN.
@@ -540,7 +724,8 @@ export default function DriverSignupScreen() {
               <LogIn color={theme.primaryOnSoft} size={16} />
               <Text style={[styles.authNoticeText, { color: theme.primaryOnSoft }]}>
                 You&apos;ll need a LOCI account to submit this application. Fill it in first —
-                we&apos;ll ask you to sign in at the end and keep your answers.
+                we&apos;ll ask you to sign in at the end. Your answers are saved on this device as
+                you type, so they survive the trip.
               </Text>
             </View>
           )}
@@ -1232,6 +1417,35 @@ const styles = StyleSheet.create({
     width: '100%',
     maxWidth: MaxContentWidth,
     gap: Spacing.three,
+  },
+  /*
+    The post-submit screen already owns `statusTitle` and `statusBody`; this is
+    the persistent card on the form itself, so it gets its own names rather than
+    silently overwriting them — a duplicate key in StyleSheet.create is legal
+    JavaScript and would have taken the last definition.
+  */
+  liveStatusCard: {
+    padding: Spacing.three - 4,
+    borderRadius: Radius.md,
+    gap: Spacing.one,
+    marginBottom: Spacing.three,
+  },
+  liveStatusHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: Spacing.two,
+  },
+  liveStatusTitle: {
+    ...Typography.body,
+    ...font(700),
+  },
+  liveStatusRef: {
+    ...Typography.meta,
+  },
+  liveStatusBody: {
+    ...Typography.meta,
+    lineHeight: 19,
   },
   authNotice: {
     flexDirection: 'row',

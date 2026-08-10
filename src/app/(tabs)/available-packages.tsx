@@ -4,6 +4,7 @@ import {
   Building2,
   CheckCheck,
   Clock,
+  Lock,
   MapPin,
   Milestone,
   Navigation,
@@ -15,10 +16,11 @@ import {
 } from 'lucide-react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useMemo, useState } from 'react';
-import { ScrollView, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
+import { Pressable, ScrollView, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
 
 import { showDialog } from '@/components/ui/dialog';
 import { useAuthGate } from '@/hooks/use-auth-gate';
+import { useDriverEligibility, type DriverEligibility } from '@/hooks/use-driver-eligibility';
 import { Badge, RoutePill } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
@@ -61,8 +63,9 @@ export default function AvailablePackagesScreen() {
   const router = useRouter();
   const { bookings, acceptBooking } = useBookings();
   const { notifyJobAccepted } = useNotifications();
-  const { user, role, setRole, driver } = useSession();
+  const { user, role, setRole, driver, isApprovedDriver, application } = useSession();
   const { requireAuth } = useAuthGate();
+  const eligibility = useDriverEligibility();
   const { width } = useWindowDimensions();
   // Below this the two dropdowns already stack, so a compact button would sit
   // alone on its own line — full width is the better tap target there.
@@ -138,6 +141,46 @@ export default function AvailablePackagesScreen() {
    * their back — or blocking the button with no explanation — ask, then switch
    * and carry the same order straight into the confirm step.
    */
+  /**
+   * Accepting requires an *approved* application, not just an account.
+   *
+   * This is what makes the 3–7 day review mean something: without it you'd be
+   * vetting people who could already collect a stranger's parcel. The RLS
+   * policy enforces the same rule server-side, so this dialog is the courtesy
+   * explanation rather than the control.
+   */
+  const requireApproval = (): boolean => {
+    if (isApprovedDriver) return true;
+
+    const status = application?.status;
+
+    if (!application) {
+      showDialog(
+        'Apply to drive first',
+        "Accepting parcels needs an approved driver application — we verify your licence, vehicle and guarantor before anyone carries a stranger's parcel.",
+        [
+          { text: 'Not now', style: 'cancel' },
+          { text: 'Apply to drive', onPress: () => router.push('/driver-signup') },
+        ],
+      );
+      return false;
+    }
+
+    if (status === 'rejected') {
+      showDialog(
+        'Application not approved',
+        'Your driver application was not approved, so jobs cannot be accepted on this account. Contact support if you think that is wrong.',
+      );
+      return false;
+    }
+
+    showDialog(
+      'Application still under review',
+      `Your application (${application.reference}) is being reviewed. Reviews take up to ${7} working days — you'll be able to accept jobs as soon as it's approved.`,
+    );
+    return false;
+  };
+
   const handleAccept = (booking: Booking) => {
     /*
      * Accepting writes this person's name and id onto someone else's parcel and
@@ -145,11 +188,17 @@ export default function AvailablePackagesScreen() {
      * anonymous browsing identity. The role prompt below is a *separate*
      * question and only makes sense once we know who is asking.
      */
-    const proceed = requireAuth(() => acceptAsDriver(booking), {
-      title: 'Sign in to accept jobs',
-      reason: `Accepting puts this delivery on your account, and the sender needs to know who is collecting it.\n\n${booking.itemDescription} · ${formatNaira(booking.estimatedFee)} payout`,
-      next: '/available-packages',
-    });
+    const proceed = requireAuth(
+      () => {
+        if (!requireApproval()) return;
+        acceptAsDriver(booking);
+      },
+      {
+        title: 'Sign in to accept jobs',
+        reason: `Accepting puts this delivery on your account, and the sender needs to know who is collecting it.\n\n${booking.itemDescription} · ${formatNaira(booking.estimatedFee)} payout`,
+        next: '/available-packages',
+      },
+    );
 
     if (!proceed) return;
   };
@@ -348,7 +397,12 @@ export default function AvailablePackagesScreen() {
         ) : (
           <View style={styles.list}>
             {results.map((booking) => (
-              <JobCard key={booking.id} booking={booking} onAccept={() => handleAccept(booking)} />
+              <JobCard
+                key={booking.id}
+                booking={booking}
+                eligibility={eligibility}
+                onAccept={() => handleAccept(booking)}
+              />
             ))}
           </View>
         )}
@@ -357,8 +411,17 @@ export default function AvailablePackagesScreen() {
   );
 }
 
-function JobCard({ booking, onAccept }: { booking: Booking; onAccept: () => void }) {
+function JobCard({
+  booking,
+  eligibility,
+  onAccept,
+}: {
+  booking: Booking;
+  eligibility: DriverEligibility;
+  onAccept: () => void;
+}) {
   const theme = useTheme();
+  const router = useRouter();
   const isLocal = booking.deliveryType === 'local';
   const distance = routeDistanceKm(booking.originCity, booking.destinationCity);
 
@@ -480,9 +543,38 @@ function JobCard({ booking, onAccept }: { booking: Booking; onAccept: () => void
           label="Accept Order"
           size="md"
           style={styles.acceptButton}
+          disabled={!eligibility.canAccept}
           icon={(color, size) => <CheckCheck color={color} size={size} />}
           onPress={onAccept}
+          // A disabled button can't be tapped, so the reason has to be visible
+          // rather than hidden behind an interaction. It's also the accessible
+          // name, so a screen reader hears why before reaching the text below.
+          accessibilityLabel={
+            eligibility.canAccept
+              ? 'Accept Order'
+              : `Accept Order, unavailable. ${eligibility.reason}`
+          }
         />
+
+        {!eligibility.canAccept && !!eligibility.reason && (
+          <View style={styles.blockedRow}>
+            <Lock color={theme.textMuted} size={12} />
+            <Text style={[styles.blockedText, { color: theme.textMuted }]}>
+              {eligibility.reason}
+            </Text>
+            {!!eligibility.action && (
+              <Pressable
+                onPress={() => router.push(eligibility.action!.href)}
+                accessibilityRole="link"
+                hitSlop={8}
+                style={({ pressed }) => pressed && styles.pressed}>
+                <Text style={[styles.blockedAction, { color: theme.primary }]}>
+                  {eligibility.action.label}
+                </Text>
+              </Pressable>
+            )}
+          </View>
+        )}
       </View>
     </Card>
   );
@@ -599,6 +691,24 @@ const styles = StyleSheet.create({
     borderTopWidth: StyleSheet.hairlineWidth,
     paddingTop: Spacing.three - 4,
     marginTop: Spacing.one,
+  },
+  blockedRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+    justifyContent: 'center',
+    gap: Spacing.one + 2,
+    marginTop: Spacing.two,
+  },
+  blockedText: {
+    ...Typography.caption,
+  },
+  blockedAction: {
+    ...Typography.caption,
+    ...font(700),
+  },
+  pressed: {
+    opacity: 0.7,
   },
   acceptButton: {
     alignSelf: 'center',

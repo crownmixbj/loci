@@ -24,8 +24,18 @@ export function Button({
   const theme = useTheme();
 
   const isPrimary = variant === 'primary';
-  const labelColor = isPrimary ? theme.primaryText : theme.primary;
   const iconSize = size === 'lg' ? 20 : 18;
+
+  /*
+   * Disabled gets its own colours rather than `opacity: 0.5`.
+   *
+   * Fading the whole button fades the label with it: measured, white on the
+   * half-faded primary blue is 2.09:1, which is not "greyed out" so much as
+   * "gone". WCAG 1.4.3 exempts inactive controls, but a disabled button whose
+   * label states *why* it is disabled has to stay readable — that label is the
+   * explanation. The muted pair below is 9.45:1.
+   */
+  const labelColor = disabled ? theme.textSecondary : isPrimary ? theme.primaryText : theme.primary;
 
   return (
     <Pressable
@@ -35,18 +45,20 @@ export function Button({
         styles.base,
         size === 'lg' ? styles.lg : styles.md,
         {
-          backgroundColor: isPrimary
-            ? state.pressed
-              ? theme.primaryPressed
-              : theme.primary
-            : state.pressed
-              ? theme.backgroundSelected
-              : theme.surface,
-          borderColor: isPrimary ? 'transparent' : theme.borderStrong,
+          backgroundColor: disabled
+            ? theme.surfaceMuted
+            : isPrimary
+              ? state.pressed
+                ? theme.primaryPressed
+                : theme.primary
+              : state.pressed
+                ? theme.backgroundSelected
+                : theme.surface,
+          borderColor: disabled ? theme.border : isPrimary ? 'transparent' : theme.borderStrong,
           shadowColor: theme.shadow,
         },
-        isPrimary && Elevation.card,
-        disabled && styles.disabled,
+        // No lift on a button that does nothing.
+        isPrimary && !disabled && Elevation.card,
         typeof style === 'function' ? style(state) : style,
       ]}
       {...rest}>
@@ -75,8 +87,5 @@ const styles = StyleSheet.create({
   },
   label: {
     ...Typography.button,
-  },
-  disabled: {
-    opacity: 0.5,
   },
 });

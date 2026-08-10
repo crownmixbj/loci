@@ -32,6 +32,8 @@ export default function TabLayout() {
         <Tabs.Screen name="driver-signup" options={{ title: 'Drivers' }} />
         <Tabs.Screen name="locations" options={{ title: 'Hubs' }} />
         <Tabs.Screen name="about" options={{ title: 'About Us' }} />
+        {/* Admin-only; the screen itself refuses non-admins. */}
+        <Tabs.Screen name="admin" options={{ title: 'Applications' }} />
         {/* Reached only after posting a parcel — not a nav destination. */}
         <Tabs.Screen name="parcel-confirmed" options={{ title: 'Parcel Posted' }} />
         {/* Reached only after accepting a job — not a nav destination. */}

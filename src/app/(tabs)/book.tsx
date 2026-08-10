@@ -28,6 +28,7 @@ import {
 
 import { showDialog } from '@/components/ui/dialog';
 import { useAuthGate } from '@/hooks/use-auth-gate';
+import { useFormDraft } from '@/hooks/use-form-draft';
 import { AreaPicker, resolveArea } from '@/components/ui/area-picker';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -37,11 +38,13 @@ import { Dropdown, ToggleRow } from '@/components/ui/dropdown';
 import { Field } from '@/components/ui/field';
 import { ModeSelector, type ModeOption } from '@/components/ui/mode-selector';
 import { PhotoPicker } from '@/components/ui/photo-picker';
+import { LocationPicker } from '@/components/ui/location-picker';
 import { SelectableUpgradeCard } from '@/components/ui/selectable-upgrade-card';
 import { ValidatedPhoneInput } from '@/components/ValidatedPhoneInput';
 import { screenPadding, ScreenHeader, SectionLabel } from '@/components/ui/screen';
 import { MaxContentWidth, Radius, Spacing, Typography, font } from '@/constants/theme';
 import { findHub, hubLabel, hubsForCity } from '@/constants/hubs';
+import { HUB_COORDINATES } from '@/constants/hub-coordinates';
 import { useTheme } from '@/hooks/use-theme';
 import { isValidNigerianPhone, nigerianPhoneError } from '@/utils/validation';
 import {
@@ -131,6 +134,11 @@ type BookingForm = {
   dropoffAddress: string;
   recipientName: string;
   recipientPhone: string;
+  /** Exact handover points, dropped on a map. Null until the sender places one. */
+  pickupLat: number | null;
+  pickupLng: number | null;
+  dropoffLat: number | null;
+  dropoffLng: number | null;
   itemDescription: string;
   /** Local URI from the picker, or '' when no photo is attached. */
   itemPhotoUri: string;
@@ -162,6 +170,10 @@ const INITIAL_FORM: BookingForm = {
   dropoffAddress: '',
   recipientName: '',
   recipientPhone: '',
+  pickupLat: null,
+  pickupLng: null,
+  dropoffLat: null,
+  dropoffLng: null,
   itemDescription: '',
   itemPhotoUri: '',
   category: 'Electronics',
@@ -172,6 +184,17 @@ const INITIAL_FORM: BookingForm = {
 };
 
 const normalizePhone = (value: string) => value.replace(/[\s()-]/g, '');
+
+/**
+ * Where the map opens before a pin exists.
+ *
+ * The city the sender already chose, not the geographic middle of Nigeria —
+ * otherwise every sender starts by panning several hundred kilometres.
+ */
+function cityCenter(city: City): { lat: number; lng: number } {
+  const point = HUB_COORDINATES[city];
+  return { lat: point.lat, lng: point.lon };
+}
 
 function validate(form: BookingForm): FieldErrors {
   const errors: FieldErrors = {};
@@ -294,6 +317,31 @@ export default function BookScreen() {
   }>();
 
   const [form, setForm] = useState<BookingForm>(INITIAL_FORM);
+
+  /*
+   * Same reason as the driver application: the account is requested at submit,
+   * so the app navigates away with a filled form and `useState` doesn't come
+   * back. Four sections of typing is too much to lose at the last step.
+   */
+  const {
+    draft,
+    ready: draftReady,
+    save: saveDraft,
+    clear: clearDraft,
+  } = useFormDraft<BookingForm>('loci.draft.booking');
+
+  const restoredDraft = useRef(false);
+
+  useEffect(() => {
+    if (!draftReady || restoredDraft.current || !draft) return;
+    restoredDraft.current = true;
+    setForm(draft);
+  }, [draftReady, draft]);
+
+  useEffect(() => {
+    if (!draftReady) return;
+    saveDraft(form);
+  }, [draftReady, form, saveDraft]);
   const [errors, setErrors] = useState<FieldErrors>({});
 
   const scrollRef = useRef<ScrollView>(null);
@@ -558,6 +606,10 @@ export default function BookScreen() {
             })(),
       dropoffArea: destinationArea,
       dropoffAddress: form.dropoffMode === 'hub' ? '' : form.dropoffAddress.trim(),
+      pickupLat: form.pickupLat,
+      pickupLng: form.pickupLng,
+      dropoffLat: form.dropoffLat,
+      dropoffLng: form.dropoffLng,
       pickupContactName: form.pickupContactName.trim(),
       senderPhone: normalizePhone(form.senderPhone),
       recipientName: form.recipientName.trim(),
@@ -585,6 +637,8 @@ export default function BookScreen() {
       return;
     }
 
+    // Posted and stored — the draft has done its job.
+    void clearDraft();
     setForm(INITIAL_FORM);
     setErrors({});
 
@@ -810,6 +864,22 @@ export default function BookScreen() {
               />
             )}
 
+            {/* Only for a public-location pickup — a hub already has an address. */}
+            {form.pickupMode !== 'hub' && (
+              <LocationPicker
+                label="Pickup point on the map"
+                hint="Optional, but it's what lets the driver find you rather than the street."
+                tone="pickup"
+                lat={form.pickupLat}
+                lng={form.pickupLng}
+                center={cityCenter(form.originCity)}
+                onChange={(position) => {
+                  setField('pickupLat', position?.lat ?? null);
+                  setField('pickupLng', position?.lng ?? null);
+                }}
+              />
+            )}
+
             <Field
               label={form.pickupMode === 'hub' ? 'Who is dropping it off?' : 'Contact person'}
               icon={(color, size) => <UserRound color={color} size={size} />}
@@ -929,6 +999,25 @@ export default function BookScreen() {
                 onChangeText={(text) => setField('dropoffAddress', text)}
                 error={errors.dropoffAddress}
                 multiline
+              />
+            )}
+
+            {/*
+              Optional, and only where a pin means something: a hub drop-off is
+              already a known location with a known address.
+            */}
+            {form.dropoffMode !== 'hub' && (
+              <LocationPicker
+                label="Drop-off point on the map"
+                hint="Optional, but it's what lets the driver navigate to the exact spot."
+                tone="dropoff"
+                lat={form.dropoffLat}
+                lng={form.dropoffLng}
+                center={cityCenter(isLocal ? form.originCity : form.destinationCity)}
+                onChange={(position) => {
+                  setField('dropoffLat', position?.lat ?? null);
+                  setField('dropoffLng', position?.lng ?? null);
+                }}
               />
             )}
 

@@ -37,7 +37,33 @@ data, not the secrecy of this key.
 
 ## Supabase setup
 
-In the Supabase dashboard:
+**Run the SQL first, in order.** Dashboard -> SQL Editor -> New query, paste,
+Run:
+
+1. `supabase/01_bookings.sql` — the bookings table and its access policies.
+2. `supabase/02_driver_applications.sql` — profiles, the admin flag, driver
+   applications, and the "approved drivers only" rule on bookings.
+
+The second file extends the first, so running it alone fails with
+`relation "public.bookings" does not exist`. It now checks for that and says so.
+
+Then make yourself an admin — the review dashboard is invisible without it:
+
+```sql
+update public.profiles set is_admin = true
+where id = (select id from auth.users where email = 'your@email.com');
+```
+
+`is_admin` cannot be set from the app: a trigger refuses the change when the
+caller is `authenticated` or `anon`, which is every request from the client. The
+SQL editor runs as `postgres` and is allowed, so admin is granted out-of-band.
+
+If you already ran an earlier version of `02_driver_applications.sql` and the
+update above fails with `is_admin can only be changed by a database
+administrator`, run `supabase/03_fix_admin_guard.sql` — the first version of
+that trigger raised unconditionally and locked out the SQL editor too.
+
+Then, in the dashboard:
 
 - **Authentication → Sign In / Providers → Email** — enabled.
 - **Authentication → URL Configuration → Redirect URLs** — add your dev origin
@@ -91,15 +117,20 @@ password reset links will fail in production.
 
 ## Notes on the current state
 
-- **Bookings are in-memory.** The parcel store is a React context seeded with
-  sample data; nothing is persisted between reloads. Auth is real, the parcel
-  data is not.
-- **Access control is client-side.** Posting a parcel, applying to drive and
-  accepting a job all require an account, but that's enforced in the UI. When
-  bookings move into Supabase tables, Row Level Security is what will actually
-  enforce it.
+- **Bookings and driver applications persist in Postgres**, with Row Level
+  Security enforcing access server-side. Until you run the SQL above, the app
+  falls back to in-memory seed data — a development convenience, not a feature;
+  nothing persists in that mode.
+- **Uploads are the weak link in the review process.** A reviewer sees the
+  filenames an applicant attached but cannot open them, so nobody should be
+  approved on the strength of that list alone. The dashboard says so.
 - **Uploads aren't uploaded.** Parcel photos and driver documents are local file
-  URIs; no storage bucket is wired up.
+  URIs; no storage bucket is wired up. Parcel photos are dropped on insert
+  rather than stored as a dead `file://` path.
+- **Driver applications hold sensitive personal data** — NINs, bank account
+  numbers and addresses, for the applicant and their guarantor. Access is
+  limited to the applicant and admins, but you need a retention policy for
+  rejected applications before real applicants use this.
 - **Notifications are queued, not sent.** `store/notifications.tsx` composes the
   driver's confirmation email and SMS and records them. Delivery needs a
   server-side sender — a client cannot hold provider credentials.

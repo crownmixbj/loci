@@ -23,6 +23,7 @@ import { Badge, RoutePill } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { EmptyState } from '@/components/ui/screen';
+import { MapView, type MapMarker } from '@/components/ui/map-view';
 import { StickyHeaderScreen } from '@/components/ui/sticky-header';
 import { MaxContentWidth, Radius, Spacing, Typography, font } from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';
@@ -155,6 +156,45 @@ export default function ParcelDetailScreen() {
           {/* Route */}
           <Card style={styles.card}>
             <Text style={[styles.sectionTitle, { color: theme.text }]}>Route</Text>
+
+            {/*
+              Only when there is something real to plot. A map that pins two
+              city centres and calls them pickup and drop-off is worse than the
+              addresses below it — for a local delivery both pins land on the
+              same dot. No pin, no map.
+            */}
+            {(() => {
+              const pins: MapMarker[] = [];
+              if (booking.pickupLat !== null && booking.pickupLng !== null) {
+                pins.push({
+                  lat: booking.pickupLat,
+                  lng: booking.pickupLng,
+                  label: `Pickup — ${booking.pickupArea || booking.originCity}`,
+                  tone: 'pickup',
+                });
+              }
+              if (booking.dropoffLat !== null && booking.dropoffLng !== null) {
+                pins.push({
+                  lat: booking.dropoffLat,
+                  lng: booking.dropoffLng,
+                  label: `Drop-off — ${booking.dropoffArea || booking.destinationCity}`,
+                  tone: 'dropoff',
+                });
+              }
+
+              if (pins.length === 0) return null;
+
+              return (
+                <View style={styles.mapWrap}>
+                  <MapView markers={pins} showRoute={pins.length > 1} height={200} />
+                  {pins.length === 1 && (
+                    <Text style={[styles.mapNote, { color: theme.textMuted }]}>
+                      Only the {pins[0].tone === 'pickup' ? 'pickup' : 'drop-off'} point was pinned.
+                    </Text>
+                  )}
+                </View>
+              );
+            })()}
             <Leg
               icon={<MapPin color={theme.primary} size={16} />}
               label="Pickup"
@@ -259,6 +299,13 @@ function CostRow({ label, value }: { label: string; value: number }) {
 }
 
 const styles = StyleSheet.create({
+  mapWrap: {
+    gap: Spacing.one,
+    marginBottom: Spacing.two,
+  },
+  mapNote: {
+    ...Typography.caption,
+  },
   container: {
     flexGrow: 1,
     alignItems: 'center',

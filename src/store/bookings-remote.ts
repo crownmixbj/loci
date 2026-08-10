@@ -27,6 +27,10 @@ export type BookingRow = {
   dropoff_area: string;
   pickup_address: string;
   dropoff_address: string;
+  pickup_lat: number | null;
+  pickup_lng: number | null;
+  dropoff_lat: number | null;
+  dropoff_lng: number | null;
   pickup_contact_name: string;
   sender_phone: string;
   recipient_name: string;
@@ -60,6 +64,12 @@ export function rowToBooking(row: BookingRow): Booking {
     dropoffArea: row.dropoff_area,
     pickupAddress: row.pickup_address,
     dropoffAddress: row.dropoff_address,
+    // `numeric` arrives as a string from PostgREST, and null must stay null —
+    // Number(null) is 0, which is a real coordinate in the Gulf of Guinea.
+    pickupLat: row.pickup_lat === null ? null : Number(row.pickup_lat),
+    pickupLng: row.pickup_lng === null ? null : Number(row.pickup_lng),
+    dropoffLat: row.dropoff_lat === null ? null : Number(row.dropoff_lat),
+    dropoffLng: row.dropoff_lng === null ? null : Number(row.dropoff_lng),
     pickupContactName: row.pickup_contact_name,
     senderPhone: row.sender_phone,
     recipientName: row.recipient_name,
@@ -98,6 +108,10 @@ export function bookingToInsert(
     dropoff_area: booking.dropoffArea,
     pickup_address: booking.pickupAddress,
     dropoff_address: booking.dropoffAddress,
+    pickup_lat: booking.pickupLat,
+    pickup_lng: booking.pickupLng,
+    dropoff_lat: booking.dropoffLat,
+    dropoff_lng: booking.dropoffLng,
     pickup_contact_name: booking.pickupContactName,
     sender_phone: booking.senderPhone,
     recipient_name: booking.recipientName,

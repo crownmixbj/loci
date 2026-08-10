@@ -5,11 +5,21 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type ReactNode,
 } from 'react';
 
 import { showToast } from '@/components/ui/toast';
+import { clearAllDrafts } from '@/hooks/use-form-draft';
+import {
+  fetchIsAdmin,
+  fetchMyApplication,
+  statusChangeMessage,
+  subscribeToMyApplication,
+  type ApplicationStatus,
+  type DriverApplication,
+} from '@/store/driver-applications';
 import { authErrorMessage, isEmailTakenCode, isSupabaseConfigured, supabase } from '@/lib/supabase';
 import type { City } from '@/store/bookings';
 
@@ -121,6 +131,14 @@ export type SessionContextValue = {
   /** Null until a driver application is submitted on this device. */
   driver: DriverRegistration | null;
   registerDriver: (registration: DriverRegistration) => void;
+  /** The signed-in user's own application, once loaded. Null if they have none. */
+  application: DriverApplication | null;
+  /** True only once an admin has approved. Gates accepting jobs. */
+  isApprovedDriver: boolean;
+  /** Whether this account can open the review dashboard. */
+  isAdmin: boolean;
+  /** Re-reads the application and admin flag, e.g. after submitting. */
+  refreshDriverStatus: () => Promise<void>;
   signUp: (params: SignUpParams) => Promise<AuthResult>;
   signIn: (params: { email: string; password: string }) => Promise<AuthResult>;
   /** Re-sends the sign-up confirmation email. */
@@ -242,6 +260,8 @@ export function SessionProvider({
   const [role, setRole] = useState<SessionRole>(initialRole);
   const [driver, setDriver] = useState<DriverRegistration | null>(null);
   const [session, setSession] = useState<Session | null>(null);
+  const [application, setApplication] = useState<DriverApplication | null>(null);
+  const [isAdmin, setIsAdmin] = useState(false);
   const [status, setStatus] = useState<SessionStatus>(
     isSupabaseConfigured ? 'loading' : 'signedOut',
   );
@@ -286,6 +306,69 @@ export function SessionProvider({
   }, []);
 
   const user = useMemo(() => (session?.user ? toSessionUser(session.user) : null), [session]);
+
+  /**
+   * Reads the application and the admin flag together.
+   *
+   * Both come from the server rather than being inferred locally: approval and
+   * admin rights are decisions someone else made, and a client that decided
+   * them for itself would be no gate at all.
+   */
+  const refreshDriverStatus = useCallback(async () => {
+    if (!isSupabaseConfigured || !user) {
+      setApplication(null);
+      setIsAdmin(false);
+      return;
+    }
+
+    const [nextApplication, nextIsAdmin] = await Promise.all([
+      fetchMyApplication(user.id).catch(() => null),
+      fetchIsAdmin(user.id).catch(() => false),
+    ]);
+
+    setApplication(nextApplication);
+    setIsAdmin(nextIsAdmin);
+  }, [user]);
+
+  useEffect(() => {
+    void refreshDriverStatus();
+  }, [refreshDriverStatus]);
+
+  /*
+   * Live application status.
+   *
+   * An applicant waiting up to seven working days should not have to reload the
+   * app to find out they've been approved. This listens to their own row and
+   * announces the change the moment an admin saves it.
+   *
+   * The previous status is held in a ref rather than read from `application`:
+   * the effect must not re-subscribe every time the row changes, or approving
+   * would tear down and rebuild the channel mid-announcement.
+   */
+  const lastStatus = useRef<ApplicationStatus | null>(null);
+
+  useEffect(() => {
+    lastStatus.current = application?.status ?? null;
+  }, [application?.status]);
+
+  useEffect(() => {
+    if (!isSupabaseConfigured || !user) return;
+
+    return subscribeToMyApplication(user.id, (next) => {
+      const announcement = statusChangeMessage(lastStatus.current, next.status);
+      lastStatus.current = next.status;
+      setApplication(next);
+
+      if (announcement) {
+        showToast(announcement.title, {
+          message: announcement.message,
+          tone: announcement.tone === 'success' ? 'success' : 'info',
+          // Longer than a greeting: this is the outcome of a week's wait.
+          duration: 7000,
+        });
+      }
+    });
+  }, [user?.id]);
 
   const toggleRole = useCallback(
     () => setRole((current) => (current === 'sender' ? 'driver' : 'sender')),
@@ -403,8 +486,17 @@ export function SessionProvider({
     if (isSupabaseConfigured) await supabase.auth.signOut();
     setSession(null);
     setStatus('signedOut');
-    // A driver registration belongs to the person, not the device.
+    /*
+     * Drafts hold a NIN, a bank account and a guarantor's details. Signing out
+     * is the clearest "I'm finished on this device" signal there is, so they go
+     * with the session rather than waiting for their 24-hour expiry.
+     */
+    await clearAllDrafts();
+
+    // These belong to the person, not the device.
     setDriver(null);
+    setApplication(null);
+    setIsAdmin(false);
     setRole('sender');
   }, []);
 
@@ -419,6 +511,10 @@ export function SessionProvider({
       toggleRole,
       driver,
       registerDriver,
+      application,
+      isApprovedDriver: application?.status === 'approved',
+      isAdmin,
+      refreshDriverStatus,
       signUp,
       signIn,
       resendConfirmation,
@@ -432,6 +528,9 @@ export function SessionProvider({
       toggleRole,
       driver,
       registerDriver,
+      application,
+      isAdmin,
+      refreshDriverStatus,
       signUp,
       signIn,
       resendConfirmation,

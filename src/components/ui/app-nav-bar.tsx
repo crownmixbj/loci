@@ -7,6 +7,7 @@ import {
   Menu,
   PackagePlus,
   PackageSearch,
+  ShieldCheck,
   Truck,
   LogOut,
   Smartphone,
@@ -68,6 +69,17 @@ function initials(name: string | undefined): string {
  */
 const LABEL_BREAKPOINT = 1020;
 const ICON_LINK_BREAKPOINT = 690;
+
+/**
+ * The admin entry adds an eighth link, and "Applications" is a long word.
+ *
+ * Measured: seven labelled links need 997px, eight need 1119px — so an admin on
+ * a 1024px laptop would overflow against the shared 1020 breakpoint. Rather
+ * than push every user to icons early, the thresholds move only for the people
+ * who actually have the extra link.
+ */
+const ADMIN_LABEL_BREAKPOINT = 1140;
+const ADMIN_ICON_LINK_BREAKPOINT = 730;
 /** Below this the capsule tightens its padding to survive a 320px phone. */
 const TIGHT_BREAKPOINT = 400;
 
@@ -83,7 +95,8 @@ type NavHref =
   | '/driver'
   | '/driver-signup'
   | '/locations'
-  | '/my-packages';
+  | '/my-packages'
+  | '/admin';
 
 /** Home matches exactly; the rest match their prefix. */
 function isActive(pathname: string, href: NavHref): boolean {
@@ -154,6 +167,17 @@ const NAV_LINKS: NavLink[] = [
     description: 'Drop-off and collection points',
   },
   {
+    /*
+      Filtered out for everyone but admins. Hiding it is a courtesy, not the
+      control — /admin refuses non-admins and RLS refuses the data.
+    */
+    key: 'admin',
+    label: 'Applications',
+    href: '/admin',
+    icon: (color, size) => <ShieldCheck color={color} size={size} />,
+    description: 'Review driver applications',
+  },
+  {
     key: 'about',
     label: 'About Us',
     href: '/about',
@@ -171,7 +195,7 @@ export function AppNavBar() {
   const pathname = usePathname();
   const [menuOpen, setMenuOpen] = useState(false);
   const [storeModalOpen, setStoreModalOpen] = useState(false);
-  const { role, setRole, user, isAuthenticated, signOut } = useSession();
+  const { role, setRole, user, isAuthenticated, isAdmin, signOut } = useSession();
   // Labels need room; below that the links drop to icons, and below *that* they
   // leave the capsule entirely — the drawer already lists every one of them, so
   // nothing becomes unreachable.
@@ -179,7 +203,7 @@ export function AppNavBar() {
    * The personal entry follows the role: a sender wants their parcels, a driver
    * wants the jobs they're carrying. Same slot, so the bar doesn't reflow.
    */
-  const navLinks = NAV_LINKS.map((link) =>
+  const navLinks = NAV_LINKS.filter((link) => link.key !== 'admin' || isAdmin).map((link) =>
     link.key === 'mine' && role === 'sender'
       ? {
           ...link,
@@ -190,8 +214,8 @@ export function AppNavBar() {
       : link,
   );
 
-  const showLabels = width >= LABEL_BREAKPOINT;
-  const showInlineLinks = width >= ICON_LINK_BREAKPOINT;
+  const showLabels = width >= (isAdmin ? ADMIN_LABEL_BREAKPOINT : LABEL_BREAKPOINT);
+  const showInlineLinks = width >= (isAdmin ? ADMIN_ICON_LINK_BREAKPOINT : ICON_LINK_BREAKPOINT);
   const tight = width < TIGHT_BREAKPOINT;
 
   /**

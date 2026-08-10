@@ -242,6 +242,18 @@ export type Booking = {
   pickupAddress: string;
   dropoffAddress: string;
 
+  /**
+   * Exact handover points, dropped by the sender on a map.
+   *
+   * Null when the parcel predates the map, or the sender skipped it. Screens
+   * fall back to the text address — a missing pin is a missing pin, not a
+   * broken screen.
+   */
+  pickupLat: number | null;
+  pickupLng: number | null;
+  dropoffLat: number | null;
+  dropoffLng: number | null;
+
   /** Who physically hands the parcel over. Required by the form. */
   pickupContactName: string;
   senderPhone: string;
@@ -525,6 +537,10 @@ const SEED_BOOKINGS: Booking[] = [
     dropoffArea: 'Ikeja',
     pickupAddress: '12 Awolowo Avenue',
     dropoffAddress: '45 Allen Avenue',
+    pickupLat: null,
+    pickupLng: null,
+    dropoffLat: null,
+    dropoffLng: null,
     senderId: SESSION_USER.id,
     pickupContactName: 'Sender',
     senderPhone: '+2348011112222',
@@ -556,6 +572,10 @@ const SEED_BOOKINGS: Booking[] = [
     dropoffArea: 'Mokola',
     pickupAddress: '8 Lebanon Street',
     dropoffAddress: '17 Oyo Road',
+    pickupLat: null,
+    pickupLng: null,
+    dropoffLat: null,
+    dropoffLng: null,
     senderId: 'user-ngozi',
     pickupContactName: 'Sender',
     senderPhone: '+2348033334444',
@@ -587,6 +607,10 @@ const SEED_BOOKINGS: Booking[] = [
     dropoffArea: 'Nassarawa',
     pickupAddress: '3 Aba Road',
     dropoffAddress: '90 Zoo Road',
+    pickupLat: null,
+    pickupLng: null,
+    dropoffLat: null,
+    dropoffLng: null,
     senderId: 'user-ada',
     pickupContactName: 'Sender',
     senderPhone: '+2348055556666',
@@ -618,6 +642,10 @@ const SEED_BOOKINGS: Booking[] = [
     dropoffArea: 'Ring Road',
     pickupAddress: '22 Lagos Bypass',
     dropoffAddress: '5 Adeoyo Street',
+    pickupLat: null,
+    pickupLng: null,
+    dropoffLat: null,
+    dropoffLng: null,
     senderId: SESSION_USER.id,
     pickupContactName: 'Sender',
     senderPhone: '+2348077778888',
@@ -649,6 +677,10 @@ const SEED_BOOKINGS: Booking[] = [
     dropoffArea: 'Wuse II',
     pickupAddress: '31 Queen Elizabeth Road',
     dropoffAddress: '14 Aminu Kano Crescent',
+    pickupLat: null,
+    pickupLng: null,
+    dropoffLat: null,
+    dropoffLng: null,
     senderId: 'user-tunde',
     pickupContactName: 'Sender',
     senderPhone: '+2348099990000',
