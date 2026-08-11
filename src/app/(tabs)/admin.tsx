@@ -1,4 +1,4 @@
-import { useRouter } from 'expo-router';
+import { useLocalSearchParams, useRouter } from 'expo-router';
 import {
   Banknote,
   CircleCheckBig,
@@ -46,7 +46,27 @@ import {
   type DriverApplication,
 } from '@/store/driver-applications';
 import { useSession } from '@/store/session';
+import { AdminOverview as OverviewPanel } from '@/components/ui/admin-overview';
 import { signedDocumentUrl } from '@/store/driver-documents';
+
+/**
+ * Two of the five Admin views: the overview, and this review queue.
+ *
+ * One screen because the overview's headline numbers *are* the queue's numbers
+ * — splitting them would mean two places computing "how many are waiting" and
+ * eventually disagreeing.
+ */
+const SECTIONS = ['overview', 'review'] as const;
+type Section = (typeof SECTIONS)[number];
+
+const SECTION_LABELS: Record<Section, string> = {
+  overview: 'Overview',
+  review: 'Driver review',
+};
+
+function parseAdminSection(value: unknown): Section {
+  return SECTIONS.includes(value as Section) ? (value as Section) : 'overview';
+}
 
 const FILTERS = ['pending', 'under_review', 'approved', 'rejected', 'all'] as const;
 type Filter = (typeof FILTERS)[number];
@@ -70,7 +90,18 @@ const FILTER_LABELS: Record<Filter, string> = {
 export default function AdminScreen() {
   const theme = useTheme();
   const router = useRouter();
+  const params = useLocalSearchParams<{ section?: string }>();
   const { user, isAdmin, isAuthenticated } = useSession();
+
+  const [section, setSection] = useState<Section>(() => parseAdminSection(params.section));
+
+  // The URL leads, so the nav can open either view while already on this screen.
+  useEffect(() => setSection(parseAdminSection(params.section)), [params.section]);
+
+  const chooseSection = (next: Section) => {
+    setSection(next);
+    router.setParams({ section: next });
+  };
 
   const [applications, setApplications] = useState<DriverApplication[]>([]);
   const [loading, setLoading] = useState(true);
@@ -196,64 +227,82 @@ export default function AdminScreen() {
       <View style={styles.content}>
         <ScreenHeader
           brand={false}
-          title="Driver applications"
-          subtitle={`Review within ${REVIEW_WORKING_DAYS} working days, as the Drivers page promises.`}
+          title={section === 'overview' ? 'Dashboard Overview' : 'Driver & App Review'}
+          subtitle={
+            section === 'overview'
+              ? 'How the platform is running right now.'
+              : `Review within ${REVIEW_WORKING_DAYS} working days, as the Drivers page promises.`
+          }
         />
-
-        {/* ---------- Queue health ---------- */}
-        <View style={styles.stats}>
-          <Stat label="Awaiting review" value={counts.pending} tone="warning" />
-          <Stat label="In review" value={counts.under_review} tone="primary" />
-          <Stat label="Approved" value={counts.approved} tone="success" />
-          <Stat
-            label={`Past ${REVIEW_WORKING_DAYS} days`}
-            value={counts.overdue}
-            tone={counts.overdue > 0 ? 'danger' : 'neutral'}
-          />
-        </View>
 
         <ChipGroup
-          options={FILTERS as unknown as string[]}
-          selected={filter}
-          onSelect={(value) => setFilter(value as Filter)}
-          renderLabel={(value) => FILTER_LABELS[value as Filter]}
+          options={SECTIONS as unknown as string[]}
+          selected={section}
+          onSelect={(value) => chooseSection(value as Section)}
+          renderLabel={(value) => SECTION_LABELS[value as Section]}
+          scrollable
         />
 
-        {!!error && (
-          <View style={[styles.banner, { backgroundColor: theme.dangerSoft }]}>
-            <Text style={[styles.bannerText, { color: theme.dangerOnSoft }]}>{error}</Text>
-          </View>
-        )}
+        {section === 'overview' && <OverviewPanel onReview={() => chooseSection('review')} />}
 
-        {loading ? (
-          <View style={styles.loading}>
-            <ActivityIndicator color={theme.primary} />
-            <Text style={[styles.loadingText, { color: theme.textSecondary }]}>
-              Loading applications…
-            </Text>
-          </View>
-        ) : visible.length === 0 ? (
-          <Card style={styles.emptyCard}>
-            <EmptyState
-              icon={(color, size) => <CircleCheckBig color={color} size={size} />}
-              title={filter === 'pending' ? 'Nothing waiting' : 'No applications here'}
-              message={
-                filter === 'pending'
-                  ? 'Every application has been looked at. New ones appear here as they arrive.'
-                  : 'Try another filter.'
-              }
+        {section === 'review' && (
+          <>
+            {/* ---------- Queue health ---------- */}
+            <View style={styles.stats}>
+              <Stat label="Awaiting review" value={counts.pending} tone="warning" />
+              <Stat label="In review" value={counts.under_review} tone="primary" />
+              <Stat label="Approved" value={counts.approved} tone="success" />
+              <Stat
+                label={`Past ${REVIEW_WORKING_DAYS} days`}
+                value={counts.overdue}
+                tone={counts.overdue > 0 ? 'danger' : 'neutral'}
+              />
+            </View>
+
+            <ChipGroup
+              options={FILTERS as unknown as string[]}
+              selected={filter}
+              onSelect={(value) => setFilter(value as Filter)}
+              renderLabel={(value) => FILTER_LABELS[value as Filter]}
             />
-          </Card>
-        ) : (
-          visible.map((application) => (
-            <ApplicationCard
-              key={application.id}
-              application={application}
-              busy={busyId === application.id}
-              onApprove={() => decide(application, 'approved')}
-              onReject={() => decide(application, 'rejected')}
-            />
-          ))
+
+            {!!error && (
+              <View style={[styles.banner, { backgroundColor: theme.dangerSoft }]}>
+                <Text style={[styles.bannerText, { color: theme.dangerOnSoft }]}>{error}</Text>
+              </View>
+            )}
+
+            {loading ? (
+              <View style={styles.loading}>
+                <ActivityIndicator color={theme.primary} />
+                <Text style={[styles.loadingText, { color: theme.textSecondary }]}>
+                  Loading applications…
+                </Text>
+              </View>
+            ) : visible.length === 0 ? (
+              <Card style={styles.emptyCard}>
+                <EmptyState
+                  icon={(color, size) => <CircleCheckBig color={color} size={size} />}
+                  title={filter === 'pending' ? 'Nothing waiting' : 'No applications here'}
+                  message={
+                    filter === 'pending'
+                      ? 'Every application has been looked at. New ones appear here as they arrive.'
+                      : 'Try another filter.'
+                  }
+                />
+              </Card>
+            ) : (
+              visible.map((application) => (
+                <ApplicationCard
+                  key={application.id}
+                  application={application}
+                  busy={busyId === application.id}
+                  onApprove={() => decide(application, 'approved')}
+                  onReject={() => decide(application, 'rejected')}
+                />
+              ))
+            )}
+          </>
         )}
       </View>
     </ScrollView>

@@ -17,6 +17,7 @@ import { DialogHost } from '@/components/ui/dialog';
 import { ToastHost } from '@/components/ui/toast';
 import { Colors } from '@/constants/theme';
 import { BookingsProvider } from '@/store/bookings';
+import { HubsProvider } from '@/store/hubs';
 import { NotificationsProvider } from '@/store/notifications';
 import { SessionProvider } from '@/store/session';
 
@@ -65,24 +66,26 @@ export default function RootLayout() {
       <SessionProvider>
         <NotificationsProvider>
           <BookingsProvider>
-            <Stack
-              screenOptions={{
-                headerShown: false,
-                contentStyle: { backgroundColor: Colors.light.background },
-              }}>
-              <Stack.Screen name="(tabs)" />
-              <Stack.Screen
-                name="rate-calculator"
-                options={{ presentation: 'modal', animation: 'slide_from_bottom' }}
-              />
-              <Stack.Screen
-                name="corporate"
-                options={{ presentation: 'modal', animation: 'slide_from_bottom' }}
-              />
-            </Stack>
-            {/* Outside the Stack so these survive navigation. */}
-            <DialogHost />
-            <ToastHost />
+            <HubsProvider>
+              <Stack
+                screenOptions={{
+                  headerShown: false,
+                  contentStyle: { backgroundColor: Colors.light.background },
+                }}>
+                <Stack.Screen name="(tabs)" />
+                <Stack.Screen
+                  name="rate-calculator"
+                  options={{ presentation: 'modal', animation: 'slide_from_bottom' }}
+                />
+                <Stack.Screen
+                  name="corporate"
+                  options={{ presentation: 'modal', animation: 'slide_from_bottom' }}
+                />
+              </Stack>
+              {/* Outside the Stack so these survive navigation. */}
+              <DialogHost />
+              <ToastHost />
+            </HubsProvider>
           </BookingsProvider>
         </NotificationsProvider>
       </SessionProvider>

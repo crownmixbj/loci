@@ -43,7 +43,8 @@ import { SelectableUpgradeCard } from '@/components/ui/selectable-upgrade-card';
 import { ValidatedPhoneInput } from '@/components/ValidatedPhoneInput';
 import { screenPadding, ScreenHeader, SectionLabel } from '@/components/ui/screen';
 import { MaxContentWidth, Radius, Spacing, Typography, font } from '@/constants/theme';
-import { findHub, hubLabel, hubsForCity } from '@/constants/hubs';
+import { findHub, hubLabel, hubsForCity, type Hub } from '@/constants/hubs';
+import { useHubs } from '@/store/hubs';
 import { HUB_COORDINATES } from '@/constants/hub-coordinates';
 import { useTheme } from '@/hooks/use-theme';
 import { isValidNigerianPhone, nigerianPhoneError } from '@/utils/validation';
@@ -196,7 +197,14 @@ function cityCenter(city: City): { lat: number; lng: number } {
   return { lat: point.lat, lng: point.lon };
 }
 
-function validate(form: BookingForm): FieldErrors {
+/**
+ * `hubs` is passed in rather than read from a module constant.
+ *
+ * Hubs are live data now — an admin can close one — so validation has to see
+ * the same list the picker offered, or it would accept a hub that no longer
+ * exists.
+ */
+function validate(form: BookingForm, hubs: Hub[]): FieldErrors {
   const errors: FieldErrors = {};
 
   // --- Item details ---
@@ -235,7 +243,7 @@ function validate(form: BookingForm): FieldErrors {
 
   if (form.pickupMode === 'hub') {
     // The area comes from the chosen hub, so the hub is what's validated.
-    if (!hubsForCity(form.originCity).length) {
+    if (!hubsForCity(hubs, form.originCity).length) {
       errors.pickupHubId = `No LOCI hub in ${form.originCity} yet — use public location pickup`;
     } else if (!form.pickupHubId) {
       errors.pickupHubId = 'Choose a LOCI hub';
@@ -433,7 +441,9 @@ export default function BookScreen() {
     [form.deliveryType, form.weight, form.declaredValue, form.pickupMode, form.dropoffMode],
   );
 
-  const cityHubs = useMemo(() => hubsForCity(form.originCity), [form.originCity]);
+  const { hubs: allHubs } = useHubs();
+
+  const cityHubs = useMemo(() => hubsForCity(allHubs, form.originCity), [allHubs, form.originCity]);
 
   /**
    * Picking a hub sets the area too. `pickupArea` is what the route label, the
@@ -441,7 +451,7 @@ export default function BookScreen() {
    * would break them — the hub is the more specific fact, the area is derived.
    */
   const selectHub = (hubId: string) => {
-    const hub = findHub(hubId);
+    const hub = findHub(allHubs, hubId);
     if (!hub) return;
 
     setForm((prev) => ({
@@ -464,7 +474,7 @@ export default function BookScreen() {
    * place follows.
    */
   const pickupSummary = useMemo(() => {
-    const hub = form.pickupMode === 'hub' ? findHub(form.pickupHubId) : undefined;
+    const hub = form.pickupMode === 'hub' ? findHub(allHubs, form.pickupHubId) : undefined;
     if (form.pickupMode === 'hub' && !hub) {
       return `${handoverModeLabel('hub', 'pickup')} · not chosen yet (${form.originCity})`;
     }
@@ -559,7 +569,7 @@ export default function BookScreen() {
   };
 
   const handleSubmit = () => {
-    const nextErrors = validate(form);
+    const nextErrors = validate(form, allHubs);
     setErrors(nextErrors);
 
     if (Object.keys(nextErrors).length > 0) {
@@ -601,7 +611,7 @@ export default function BookScreen() {
         form.pickupMode === 'doorstep'
           ? form.pickupAddress.trim()
           : (() => {
-              const hub = findHub(form.pickupHubId);
+              const hub = findHub(allHubs, form.pickupHubId);
               return hub ? `${hub.name}, ${hub.address}` : '';
             })(),
       dropoffArea: destinationArea,
@@ -800,7 +810,7 @@ export default function BookScreen() {
                   selected={form.pickupHubId}
                   onSelect={selectHub}
                   renderLabel={(id) => {
-                    const hub = findHub(id);
+                    const hub = findHub(allHubs, id);
                     return hub ? hubLabel(hub) : id;
                   }}
                   placeholder={`Choose a hub in ${form.originCity}`}

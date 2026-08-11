@@ -276,6 +276,14 @@ export function SessionProvider({
   );
 
   /**
+   * Who has already been welcomed, for as long as the app is running.
+   *
+   * A ref rather than state: nothing renders from it, and making it state would
+   * re-render every consumer of this context on sign-in for no visible reason.
+   */
+  const greetedUserId = useRef<string | null>(null);
+
+  /**
    * Restore any stored session, then follow it. `onAuthStateChange` covers sign
    * in, sign out, token refresh and expiry, so no screen has to poll.
    */
@@ -295,15 +303,27 @@ export function SessionProvider({
       setStatus(next ? 'signedIn' : 'signedOut');
 
       /*
-       * Greet on a real sign-in only.
+       * Greet once per person, not once per event.
        *
-       * Supabase fires this listener for several things. `INITIAL_SESSION` is
-       * the stored session being restored at launch and `TOKEN_REFRESHED` fires
-       * roughly hourly in the background — greeting on those would say "welcome
-       * back" every time the app opened, and again while the person was
-       * mid-task. `SIGNED_IN` is the one that means someone just arrived.
+       * Filtering on `SIGNED_IN` alone was not enough. Supabase re-emits it
+       * whenever a web tab regains visibility — it re-validates the stored
+       * session on focus and announces the result — so switching to another tab
+       * and back produced "Welcome back" every single time. `INITIAL_SESSION`
+       * and `TOKEN_REFRESHED` are excluded for related reasons: the first fires
+       * on every launch, the second roughly hourly, mid-task.
+       *
+       * Remembering *who* was greeted is what actually fixes it, and it does so
+       * whatever new reason Supabase finds to re-emit the event. Signing out
+       * clears it, so signing back in — as the same person or a different one —
+       * greets again, which is the one case where the message is warranted.
        */
-      if (event === 'SIGNED_IN' && next?.user) {
+      if (event === 'SIGNED_OUT') {
+        greetedUserId.current = null;
+        return;
+      }
+
+      if (event === 'SIGNED_IN' && next?.user && greetedUserId.current !== next.user.id) {
+        greetedUserId.current = next.user.id;
         welcome(next.user);
       }
     });
@@ -349,9 +369,28 @@ export function SessionProvider({
     setDriverStatusLoaded(true);
   }, [user]);
 
+  /**
+   * Reload the application whenever the *person* changes — not whenever the
+   * session object does.
+   *
+   * `user` is derived from `session`, so it gets a new identity on every token
+   * refresh. Keying the reset on `user.id` instead means an hourly refresh does
+   * not blank `driverStatusLoaded` and flash a spinner over whatever the person
+   * was reading.
+   */
+  const loadedForUserId = useRef<string | null>(null);
+
   useEffect(() => {
+    const id = user?.id ?? null;
+    if (loadedForUserId.current === id) return;
+
+    loadedForUserId.current = id;
+    // Back to "not asked yet". Without this, a returning applicant would be
+    // shown the blank Be a Driver form for the moment before their row loads,
+    // because the flag was left true by the previous session.
+    setDriverStatusLoaded(false);
     void refreshDriverStatus();
-  }, [refreshDriverStatus]);
+  }, [user?.id, refreshDriverStatus]);
 
   /*
    * Live application status.
@@ -515,8 +554,16 @@ export function SessionProvider({
     // These belong to the person, not the device.
     setDriver(null);
     setApplication(null);
+    setDriverStatusLoaded(false);
     setIsAdmin(false);
     setRole('sender');
+
+    /*
+     * Belt and braces alongside the `SIGNED_OUT` listener: when Supabase is not
+     * configured no auth event fires at all, and the next sign-in should still
+     * be greeted.
+     */
+    greetedUserId.current = null;
   }, []);
 
   const value = useMemo(

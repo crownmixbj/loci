@@ -19,6 +19,14 @@ export type Hub = {
   /** Flagship hub for that city — surfaced with a badge. */
   flagship?: boolean;
   /**
+   * False for a hub that has been closed.
+   *
+   * Optional so the seed array does not have to repeat `active: true` for every
+   * entry; absent means open. Closing rather than deleting is deliberate — a
+   * deleted hub would orphan every booking that references it.
+   */
+  active?: boolean;
+  /**
    * Surveyed position of the actual door. Absent for every hub today — see
    * `hubPosition` below, which falls back to the neighbourhood.
    */
@@ -36,8 +44,19 @@ export type HubPosition = {
   precision: 'area' | 'exact';
 };
 
-/** Placeholder network — replace with a hubs endpoint when one exists. */
-export const HUBS: Hub[] = [
+/**
+ * The network as first written, now only a seed and a fallback.
+ *
+ * The live list lives in `public.hubs` (see `supabase/08_hubs.sql`) so an admin
+ * can correct an address without a deploy. This array stays for two reasons:
+ * it is what seeds that table, and `store/hubs.tsx` falls back to it when
+ * Supabase is unconfigured or the migration has not been run — so the app never
+ * shows an empty network because of a missing table.
+ *
+ * ⚠ Editing this no longer changes what anyone sees. Edit the hub in the Admin
+ *   area instead; the seed is `on conflict do nothing` and will not overwrite it.
+ */
+export const SEED_HUBS: Hub[] = [
   // ---- Lagos ----
   {
     id: 'lag-1',
@@ -305,18 +324,25 @@ export function hasApproximatePositions(hubs: Hub[]): boolean {
   return hubs.some((hub) => hubPosition(hub)?.precision === 'area');
 }
 
+/*
+ * The helpers below take the list explicitly rather than reading a module
+ * constant. That is what lets them work against the live table: a function that
+ * closes over `SEED_HUBS` would keep answering from the seed no matter what an
+ * admin changed, and the mistake would be invisible at every call site.
+ */
+
 /** Hubs in one city, in the order they were listed. */
-export function hubsForCity(city: City): Hub[] {
-  return HUBS.filter((hub) => hub.city === city);
+export function hubsForCity(hubs: Hub[], city: City): Hub[] {
+  return hubs.filter((hub) => hub.city === city);
 }
 
 /** Cities we have actually opened a hub in — 4 of the 37 today. */
-export function citiesWithHubs(cities: readonly City[]): City[] {
-  return cities.filter((city) => HUBS.some((hub) => hub.city === city));
+export function citiesWithHubs(hubs: Hub[], cities: readonly City[]): City[] {
+  return cities.filter((city) => hubs.some((hub) => hub.city === city));
 }
 
-export function findHub(id: string): Hub | undefined {
-  return HUBS.find((hub) => hub.id === id);
+export function findHub(hubs: Hub[], id: string): Hub | undefined {
+  return hubs.find((hub) => hub.id === id);
 }
 
 /** "LOCI Ikeja Hub — Ikeja" */

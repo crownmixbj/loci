@@ -22,7 +22,6 @@ import { MapView, type MapMarker } from '@/components/ui/map-view';
 import { EmptyState, screenPadding, ScreenHeader, SectionLabel } from '@/components/ui/screen';
 import { openLabel, openState } from '@/constants/hub-hours';
 import {
-  HUBS,
   HUB_SECTIONS,
   HUB_SECTION_SHORT,
   citiesWithHubs,
@@ -36,6 +35,7 @@ import {
 import { MaxContentWidth, Radius, Spacing, Typography, font } from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';
 import { CITIES, cityHubLabel, DEFAULT_CITY, type City } from '@/store/bookings';
+import { useHubs } from '@/store/hubs';
 
 /** Pretty-print a stored E.164-ish number: +234 803 000 1101 */
 function formatPhone(phone: string): string {
@@ -90,8 +90,11 @@ export default function LocationsScreen() {
    */
   useEffect(() => setSection(parseHubSection(params.section)), [params.section]);
 
-  const cities = useMemo(() => citiesWithHubs(CITIES), []);
-  const hubs = useMemo(() => hubsForCity(city), [city]);
+  // Live from the database, falling back to the seed — see `store/hubs.tsx`.
+  const { hubs: allHubs } = useHubs();
+
+  const cities = useMemo(() => citiesWithHubs(allHubs, CITIES), [allHubs]);
+  const hubs = useMemo(() => hubsForCity(allHubs, city), [allHubs, city]);
 
   /** Keeps the address bar honest when the section is changed on screen. */
   const chooseSection = (next: HubSection) => {
@@ -132,7 +135,7 @@ export default function LocationsScreen() {
             options={cities}
             selected={city}
             onSelect={setCity}
-            renderLabel={(c) => `${c} (${HUBS.filter((h) => h.city === c).length})`}
+            renderLabel={(c) => `${c} (${allHubs.filter((h) => h.city === c).length})`}
             scrollable
           />
         </View>

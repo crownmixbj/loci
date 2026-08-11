@@ -68,6 +68,59 @@ check(
  * off the right of the capsule, where there is only the role pill and the
  * avatar — so half of it lands outside the viewport.
  */
+/*
+ * A parent with children must not navigate.
+ *
+ * Every grouped `href` is the same destination as that group's first child, so
+ * a navigating heading looked exactly like the app picking option one — which
+ * is what it was doing. The press has to toggle the menu instead.
+ */
+check(
+  'a parent toggles its menu rather than navigating',
+  navSource.includes('if (!hasChildren) {') && navSource.includes('onSubmenuChange(!submenuOpen)'),
+  'a heading that navigates jumps straight to its first child',
+);
+check(
+  'and announces itself as a menu, not a link',
+  navSource.includes("accessibilityRole={hasChildren ? 'button' : 'link'}") &&
+    navSource.includes('hasChildren ? { expanded: submenuOpen } : { selected: active }'),
+  '"link, selected" promises navigation that does not happen',
+);
+/*
+ * The drawer is an accordion, not a permanently expanded list.
+ *
+ * Every group used to be open at once. Eleven children across four groups
+ * turned the drawer into a wall on a phone and pushed About Us and Admin below
+ * the fold — so the last two entries became the hardest to reach rather than
+ * the easiest.
+ */
+check(
+  'a drawer group toggles rather than navigating',
+  navSource.includes('setExpanded(isOpen ? null : link.key)') &&
+    navSource.includes('accessibilityState={{ expanded: isOpen }}'),
+  'its children sit directly below it, so a navigating header picks one for you',
+);
+check(
+  'children render only when their group is open',
+  navSource.includes('{isOpen &&'),
+  'permanently expanded is what buried the last two groups',
+);
+check(
+  'one group at a time',
+  navSource.includes('useState<string | null>(null)') && !navSource.includes('Set<string>'),
+  'two groups expanded is most of the scroll back',
+);
+check(
+  'the group holding the current page opens automatically',
+  navSource.includes('links.find((link) => link.children && isActive(pathname, link))'),
+  'someone deep in the driver screens should see those siblings without hunting',
+);
+check(
+  'and that is recomputed each time the drawer opens',
+  navSource.includes('}, [open, pathname, links]);'),
+  'the route changes underneath a drawer that stays mounted',
+);
+
 check(
   'the rightmost dropdowns are end-aligned',
   navSource.includes('alignEnd={index >= navLinks.length - 2}') && navSource.includes('submenuEnd'),

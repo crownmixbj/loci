@@ -4,7 +4,9 @@ import {
   Archive,
   BellRing,
   BookOpen,
+  ChartColumn,
   ChevronDown,
+  ClipboardCheck,
   Clock,
   Info,
   LayoutDashboard,
@@ -14,8 +16,10 @@ import {
   Menu,
   PackagePlus,
   PackageSearch,
+  FileWarning,
   Radar,
   Scale,
+  UsersRound,
   ShieldCheck,
   Truck,
   LogOut,
@@ -120,7 +124,10 @@ type NavHref =
   | '/my-packages'
   | '/support'
   | '/tracking'
-  | '/admin';
+  | '/admin'
+  | '/admin-logs'
+  | '/admin-ops'
+  | '/admin-users';
 
 /** Home matches exactly; the rest match their prefix. */
 function matchesHref(pathname: string, href: string): boolean {
@@ -332,13 +339,58 @@ const NAV_LINKS: NavLink[] = [
   {
     /*
       Filtered out for everyone but admins. Hiding it is a courtesy, not the
-      control — /admin refuses non-admins and RLS refuses the data.
+      control — every screen behind it refuses non-admins, and the RLS policies
+      and `security definer` functions in `07_admin.sql` refuse the data.
+
+      This was a single "Applications" entry pointing at the review queue. That
+      queue is now one of five, so it moved inside rather than sitting in the
+      nav twice.
     */
     key: 'admin',
-    label: 'Applications',
+    label: 'Admin',
     href: '/admin',
     icon: (color, size) => <ShieldCheck color={color} size={size} />,
-    description: 'Review driver applications',
+    description: 'Run the platform',
+    also: ['/admin-users', '/admin-ops', '/admin-logs'],
+    children: [
+      {
+        key: 'overview',
+        label: 'Dashboard Overview',
+        description: 'Queue health, volumes and errors at a glance',
+        href: '/admin',
+        section: 'overview',
+        icon: (color, size) => <ChartColumn color={color} size={size} />,
+      },
+      {
+        key: 'review',
+        label: 'Driver & App Review',
+        description: 'Approve or reject driver applications',
+        href: '/admin',
+        section: 'review',
+        icon: (color, size) => <ClipboardCheck color={color} size={size} />,
+      },
+      {
+        key: 'users',
+        label: 'User & Role Mgmt.',
+        description: 'Accounts, and who holds admin',
+        href: '/admin-users',
+        icon: (color, size) => <UsersRound color={color} size={size} />,
+      },
+      {
+        key: 'ops',
+        label: 'Hubs & Operations',
+        description: 'The network, and what is moving through it',
+        href: '/admin-ops',
+        icon: (color, size) => <MapPinned color={color} size={size} />,
+      },
+      {
+        key: 'logs',
+        label: 'System Logs & Errors',
+        description: 'What the app recorded going wrong',
+        href: '/admin-logs',
+        icon: (color, size) => <FileWarning color={color} size={size} />,
+      },
+    ],
   },
   {
     key: 'about',
@@ -658,16 +710,22 @@ export function AppNavBar() {
 }
 
 /**
- * One link in the capsule, with an optional submenu.
+ * One entry in the capsule: a link, or a menu that holds several.
  *
- * The submenu is deliberately not hover-only. Hover does not exist on a phone,
- * and a menu that only opens on hover is unreachable for anyone using touch, a
- * keyboard, or a screen reader — so hover is an accelerator on web and the
- * caret is a real, focusable disclosure button everywhere.
+ * A parent **only opens its menu** — it does not navigate. It used to do both,
+ * pointing at its own `href`, and every one of those four hrefs was the same
+ * destination as the entry's *first child*: Jobs & Drivers → Find Open Jobs,
+ * Shipments → Send a New Parcel, Hubs → Drop-off / Pickup Locations, About Us →
+ * About LOCI. So clicking a heading looked exactly like the app choosing item
+ * one for you, which is what it was doing.
  *
- * The link and the caret are separate controls, which is the standard pattern:
- * "Hubs" goes to the Hubs page, the caret reveals the three views of it.
- * Merging them would mean you cannot reach the page without opening the menu.
+ * That also collapses the caret into the label. Two controls made sense while
+ * the heading led somewhere of its own; now it is one thing — a disclosure —
+ * and splitting it would leave a second tab stop that does the same job.
+ *
+ * The menu is deliberately not hover-only. Hover does not exist on a phone, and
+ * a menu that only opens on hover is unreachable by touch, keyboard or screen
+ * reader — so hover is a web accelerator and the press is the real control.
  */
 function NavLinkItem({
   link,
@@ -734,10 +792,23 @@ function NavLinkItem({
   // its own fails WCAG 1.4.1 regardless. The underline is what marks state.
   const color = active ? theme.primary : NavLinkColor;
 
-  // Only where there is room for it. At icon-only widths a caret beside a 19px
-  // glyph is unreadable, so the drawer carries the children instead — and the
-  // drawer is always one tap away at those widths.
-  const showCaret = Boolean(link.children) && showLabels;
+  const hasChildren = Boolean(link.children);
+
+  /*
+   * A parent toggles; a leaf navigates.
+   *
+   * Toggling rather than only opening matters for the hover case on web: the
+   * pointer has already opened the menu by the time a click lands, and a press
+   * that could only open would be a dead click.
+   */
+  const handlePress = () => {
+    if (!hasChildren) {
+      onPress();
+      return;
+    }
+    cancelClose();
+    onSubmenuChange(!submenuOpen);
+  };
 
   return (
     <View
@@ -746,64 +817,57 @@ function NavLinkItem({
       // The raised z-index applies only while open, so a closed link never sits
       // above its neighbours and steal their taps.
       style={[styles.linkWrapper, submenuOpen && styles.linkWrapperOpen]}>
-      <View style={styles.linkRow}>
-        <Pressable
-          onPress={onPress}
-          accessibilityRole="link"
-          accessibilityLabel={link.label}
-          accessibilityState={{ selected: active }}
-          style={({ pressed }) => [
-            styles.link,
-            !showLabels && styles.linkIconOnly,
-            // Compact mode: the soft fill is 1.15:1 on white — all but invisible
-            // on its own — so the ring carries the state.
-            active &&
-              !showLabels && {
-                backgroundColor: theme.primarySoft,
-                borderColor: theme.primary,
-              },
-            pressed && styles.pressed,
-          ]}>
-          {!showLabels && link.icon(color, 19)}
-          {showLabels && (
-            <View style={styles.linkLabel}>
+      <Pressable
+        onPress={handlePress}
+        accessibilityRole={hasChildren ? 'button' : 'link'}
+        accessibilityLabel={link.label}
+        /*
+         * `expanded` for a menu, `selected` for a link. A screen reader
+         * announcing "link, selected" for something that opens a menu is a
+         * promise of navigation that does not happen.
+         */
+        accessibilityState={hasChildren ? { expanded: submenuOpen } : { selected: active }}
+        style={({ pressed }) => [
+          styles.link,
+          !showLabels && styles.linkIconOnly,
+          // Compact mode: the soft fill is 1.15:1 on white — all but invisible
+          // on its own — so the ring carries the state.
+          active &&
+            !showLabels && {
+              backgroundColor: theme.primarySoft,
+              borderColor: theme.primary,
+            },
+          pressed && styles.pressed,
+        ]}>
+        {!showLabels && link.icon(color, 19)}
+        {showLabels && (
+          <View style={styles.linkLabel}>
+            <View style={styles.linkTextRow}>
               <Text style={[styles.linkText, { color }]}>{link.label}</Text>
               {/*
-                Always rendered, transparent when inactive, so switching pages
-                never nudges the row by 2px.
+                Inside the same control, not beside it. Rotating one chevron
+                rather than swapping in an up-chevron keeps the direction
+                honest mid-animation.
               */}
-              <View
-                style={[
-                  styles.underline,
-                  { backgroundColor: active ? theme.primary : 'transparent' },
-                ]}
-              />
+              {hasChildren && (
+                <View style={submenuOpen ? styles.caretOpen : undefined}>
+                  <ChevronDown color={color} size={15} />
+                </View>
+              )}
             </View>
-          )}
-        </Pressable>
-
-        {showCaret && (
-          <Pressable
-            onPress={() => {
-              cancelClose();
-              onSubmenuChange(!submenuOpen);
-            }}
-            accessibilityRole="button"
-            accessibilityLabel={`${link.label} menu`}
-            accessibilityState={{ expanded: submenuOpen }}
-            hitSlop={8}
-            style={({ pressed }) => [styles.caret, pressed && styles.pressed]}>
             {/*
-              Rotating the chevron rather than swapping it for an up-chevron:
-              one glyph, and the direction always matches the open state even
-              mid-animation.
+              Always rendered, transparent when inactive, so switching pages
+              never nudges the row by 2px.
             */}
-            <View style={submenuOpen ? styles.caretOpen : undefined}>
-              <ChevronDown color={color} size={15} />
-            </View>
-          </Pressable>
+            <View
+              style={[
+                styles.underline,
+                { backgroundColor: active ? theme.primary : 'transparent' },
+              ]}
+            />
+          </View>
         )}
-      </View>
+      </Pressable>
 
       {submenuOpen && link.children && (
         <View
@@ -876,6 +940,32 @@ function SideMenu({
   // disagree about which page is current.
   const pathname = usePathname();
 
+  /**
+   * Which group is open. One at a time.
+   *
+   * The children used to be permanently expanded, on the reasoning that the
+   * drawer is the only route to them on a phone. That was right about the
+   * requirement and wrong about the shape: eleven children between four groups
+   * turned the drawer into a wall and pushed About Us and Admin below the fold,
+   * so the last two entries were the hardest to reach rather than the easiest.
+   *
+   * An accordion keeps every group one tap from the top. Single-open rather
+   * than multi-open for the same reason — two groups expanded is most of the
+   * scroll back.
+   */
+  const [expanded, setExpanded] = useState<string | null>(null);
+
+  /*
+   * Opens on the group that owns the current page, so someone deep in the
+   * driver screens sees those siblings without hunting for them. Recomputed
+   * each time the drawer opens rather than once on mount, because the route
+   * changes underneath a drawer that stays mounted.
+   */
+  useEffect(() => {
+    if (!open) return;
+    setExpanded(links.find((link) => link.children && isActive(pathname, link))?.key ?? null);
+  }, [open, pathname, links]);
+
   return (
     <Modal visible={open} transparent animationType="fade" onRequestClose={onClose}>
       <Pressable style={styles.backdrop} onPress={onClose} accessibilityLabel="Close menu">
@@ -907,75 +997,123 @@ function SideMenu({
             {links.map((link) => {
               const active = isActive(pathname, link);
 
-              return (
-                <View key={link.key}>
-                  <Pressable
-                    onPress={() => onNavigate(link.href)}
-                    accessibilityRole="link"
-                    accessibilityState={{ selected: active }}
-                    style={({ pressed }) => [
-                      styles.drawerItem,
-                      { borderBottomColor: theme.navBorder },
-                      active && { backgroundColor: theme.primarySoft },
-                      pressed && { backgroundColor: theme.surfaceMuted },
-                    ]}>
-                    {/*
+              /*
+               * A grouped entry is a heading here, not a link.
+               *
+               * Its `href` is the same destination as its first child, and the
+               * children are listed immediately below — so making it pressable
+               * would offer two controls that do the same thing, one of which
+               * silently picks an option for you.
+               */
+              const grouped = Boolean(link.children);
+
+              /*
+               * Written out twice rather than swapping the component type.
+               * `View` takes an object style and `Pressable` takes a function
+               * of press state; a `Row = grouped ? View : Pressable` compiles
+               * happily and then hands `View` a function it cannot call.
+               */
+              const rowContent = (
+                <>
+                  {/*
                     Left rule marking the current page. The tinted row alone is
                     1.15:1 against the drawer — the bar is what's actually
                     visible, and it means the state isn't carried by colour
                     alone.
                   */}
-                    <View
+                  <View
+                    style={[
+                      styles.drawerActiveBar,
+                      { backgroundColor: active ? theme.primary : 'transparent' },
+                    ]}
+                  />
+                  <View style={[styles.drawerIcon, { backgroundColor: theme.primarySoft }]}>
+                    {link.icon(theme.primaryOnSoft, 18)}
+                  </View>
+                  <View style={styles.drawerItemText}>
+                    <Text
                       style={[
-                        styles.drawerActiveBar,
-                        { backgroundColor: active ? theme.primary : 'transparent' },
-                      ]}
-                    />
-                    <View style={[styles.drawerIcon, { backgroundColor: theme.primarySoft }]}>
-                      {link.icon(theme.primaryOnSoft, 18)}
-                    </View>
-                    <View style={styles.drawerItemText}>
-                      <Text
-                        style={[
-                          styles.drawerLabel,
-                          { color: active ? theme.primary : theme.text },
-                          active && font(700),
-                        ]}>
-                        {link.label}
-                      </Text>
-                      <Text style={[styles.drawerDescription, { color: theme.textMuted }]}>
-                        {link.description}
-                      </Text>
-                    </View>
-                  </Pressable>
+                        styles.drawerLabel,
+                        { color: active ? theme.primary : theme.text },
+                        active && font(700),
+                      ]}>
+                      {link.label}
+                    </Text>
+                    <Text style={[styles.drawerDescription, { color: theme.textMuted }]}>
+                      {link.description}
+                    </Text>
+                  </View>
+                </>
+              );
 
-                  {/*
-                    Children are always expanded here rather than hidden behind
-                    a second tap. The drawer is the *only* route to them at
-                    phone widths — there is no hover, and the capsule drops its
-                    caret below 1020px — so burying them would make three
-                    sections unreachable on the devices most people use.
-                  */}
-                  {link.children?.map((child) => (
+              const isOpen = expanded === link.key;
+
+              return (
+                <View key={link.key}>
+                  {grouped ? (
                     <Pressable
-                      key={child.key}
-                      onPress={() => onNavigateChild(child)}
-                      accessibilityRole="link"
-                      accessibilityLabel={`${link.label}: ${child.label}`}
+                      onPress={() => setExpanded(isOpen ? null : link.key)}
+                      accessibilityRole="button"
+                      accessibilityLabel={link.label}
+                      accessibilityState={{ expanded: isOpen }}
                       style={({ pressed }) => [
-                        styles.drawerChild,
+                        styles.drawerItem,
                         { borderBottomColor: theme.navBorder },
+                        active && { backgroundColor: theme.primarySoft },
                         pressed && { backgroundColor: theme.surfaceMuted },
                       ]}>
-                      <View
-                        style={[styles.drawerChildRule, { backgroundColor: theme.navBorder }]}
-                      />
-                      {child.icon(theme.textSecondary, 15)}
-                      <Text style={[styles.drawerChildLabel, { color: theme.textSecondary }]}>
-                        {child.label}
-                      </Text>
+                      {rowContent}
+                      {/*
+                        Rotating one chevron rather than swapping glyphs, so the
+                        direction stays honest mid-animation — same as the
+                        capsule.
+                      */}
+                      <View style={isOpen ? styles.caretOpen : undefined}>
+                        <ChevronDown color={theme.textMuted} size={18} />
+                      </View>
                     </Pressable>
-                  ))}
+                  ) : (
+                    <Pressable
+                      onPress={() => onNavigate(link.href)}
+                      accessibilityRole="link"
+                      accessibilityState={{ selected: active }}
+                      style={({ pressed }) => [
+                        styles.drawerItem,
+                        { borderBottomColor: theme.navBorder },
+                        active && { backgroundColor: theme.primarySoft },
+                        pressed && { backgroundColor: theme.surfaceMuted },
+                      ]}>
+                      {rowContent}
+                    </Pressable>
+                  )}
+
+                  {/*
+                    Only the open group's children. They are still the *only*
+                    route to those screens on a phone — there is no hover, and
+                    the capsule drops its caret below 1040px — which is why the
+                    group containing the current page opens automatically.
+                  */}
+                  {isOpen &&
+                    link.children?.map((child) => (
+                      <Pressable
+                        key={child.key}
+                        onPress={() => onNavigateChild(child)}
+                        accessibilityRole="link"
+                        accessibilityLabel={`${link.label}: ${child.label}`}
+                        style={({ pressed }) => [
+                          styles.drawerChild,
+                          { borderBottomColor: theme.navBorder },
+                          pressed && { backgroundColor: theme.surfaceMuted },
+                        ]}>
+                        <View
+                          style={[styles.drawerChildRule, { backgroundColor: theme.navBorder }]}
+                        />
+                        {child.icon(theme.textSecondary, 15)}
+                        <Text style={[styles.drawerChildLabel, { color: theme.textSecondary }]}>
+                          {child.label}
+                        </Text>
+                      </Pressable>
+                    ))}
                 </View>
               );
             })}
@@ -1133,21 +1271,15 @@ const styles = StyleSheet.create({
   linkWrapperOpen: {
     zIndex: 60,
   },
-  linkRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 2,
-  },
   link: {
     paddingVertical: Spacing.one,
-  },
-  caret: {
-    paddingVertical: Spacing.one,
-    paddingHorizontal: 1,
-    // Cancels the 5px gap the label reserves for its underline, so the chevron
-    // sits on the text baseline rather than floating above it.
-    marginBottom: 7,
     ...Platform.select({ web: { cursor: 'pointer' }, default: {} }),
+  },
+  /** Label and chevron on one baseline, above the shared underline. */
+  linkTextRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
   },
   caretOpen: {
     transform: [{ rotate: '180deg' }],
