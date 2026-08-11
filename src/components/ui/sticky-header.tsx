@@ -55,8 +55,17 @@ const styles = StyleSheet.create({
     backgroundColor: PageCanvas,
     paddingBottom: Spacing.two,
   },
+  /**
+   * Explicitly *below* the navbar.
+   *
+   * The two are siblings, so without a z-index each they stack in document
+   * order and the ticker — being second — covered any open nav dropdown. Stated
+   * on both sides rather than only on the navbar, so the ordering is visible
+   * from whichever file someone opens first.
+   */
   ticker: {
     paddingHorizontal: Spacing.four,
     marginTop: Spacing.two,
+    zIndex: 1,
   },
 });

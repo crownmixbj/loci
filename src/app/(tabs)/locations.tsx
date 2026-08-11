@@ -1,4 +1,4 @@
-import { useRouter } from 'expo-router';
+import { useLocalSearchParams, useRouter } from 'expo-router';
 import {
   Clock,
   MapPin,
@@ -8,8 +8,9 @@ import {
   PackagePlus,
   Phone,
   Store,
+  TriangleAlert,
 } from 'lucide-react-native';
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Linking, Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import { showDialog } from '@/components/ui/dialog';
@@ -17,8 +18,21 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { ChipGroup } from '@/components/ui/chip';
+import { MapView, type MapMarker } from '@/components/ui/map-view';
 import { EmptyState, screenPadding, ScreenHeader, SectionLabel } from '@/components/ui/screen';
-import { HUBS, citiesWithHubs, hubsForCity, type Hub } from '@/constants/hubs';
+import { openLabel, openState } from '@/constants/hub-hours';
+import {
+  HUBS,
+  HUB_SECTIONS,
+  HUB_SECTION_SHORT,
+  citiesWithHubs,
+  hasApproximatePositions,
+  hubPosition,
+  hubsForCity,
+  parseHubSection,
+  type Hub,
+  type HubSection,
+} from '@/constants/hubs';
 import { MaxContentWidth, Radius, Spacing, Typography, font } from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';
 import { CITIES, cityHubLabel, DEFAULT_CITY, type City } from '@/store/bookings';
@@ -55,13 +69,35 @@ function openDirections(hub: Hub) {
 const FLAGSHIP_NOTE =
   'Flagship hubs carry the full service list, including packaging. Smaller counters handle drop-off and collection only.';
 
+const SECTION_SUBTITLES: Record<HubSection, string> = {
+  locations: 'Drop a parcel off yourself, or have it held for collection.',
+  map: 'Where every counter sits, so you can pick the one on your way.',
+  hours: "When each hub opens, and what's open right now.",
+};
+
 export default function LocationsScreen() {
   const theme = useTheme();
   const router = useRouter();
+  const params = useLocalSearchParams<{ section?: string }>();
+
   const [city, setCity] = useState<City>(DEFAULT_CITY);
+  const [section, setSection] = useState<HubSection>(() => parseHubSection(params.section));
+
+  /*
+   * The URL leads. Tapping "Sorting Centers Map" in the nav while already on
+   * this screen changes the query string without remounting, so without this
+   * the submenu would appear to do nothing.
+   */
+  useEffect(() => setSection(parseHubSection(params.section)), [params.section]);
 
   const cities = useMemo(() => citiesWithHubs(CITIES), []);
   const hubs = useMemo(() => hubsForCity(city), [city]);
+
+  /** Keeps the address bar honest when the section is changed on screen. */
+  const chooseSection = (next: HubSection) => {
+    setSection(next);
+    router.setParams({ section: next });
+  };
 
   return (
     <ScrollView
@@ -71,8 +107,24 @@ export default function LocationsScreen() {
         <ScreenHeader
           brand={false}
           title="Partner Hub Locations"
-          subtitle="Drop a parcel off yourself, or have it held for collection."
+          subtitle={SECTION_SUBTITLES[section]}
         />
+
+        <View style={styles.sectionTabs}>
+          <ChipGroup
+            options={HUB_SECTIONS as unknown as string[]}
+            selected={section}
+            onSelect={(value) => chooseSection(value as HubSection)}
+            /*
+              Short labels here, full names in the nav submenu. "Drop-off /
+              Pickup Locations" is 26 characters — three of those side by side
+              would wrap to three lines on a phone. The screen title and
+              subtitle already carry the longer meaning.
+            */
+            renderLabel={(value) => HUB_SECTION_SHORT[value as HubSection]}
+            scrollable
+          />
+        </View>
 
         <View style={[styles.filterBlock, { borderBottomColor: theme.border }]}>
           <SectionLabel>Select a city</SectionLabel>
@@ -95,6 +147,10 @@ export default function LocationsScreen() {
             title="No hubs yet"
             message={`We haven't opened a partner hub in ${city}. Doorstep pickup still covers the whole city.`}
           />
+        ) : section === 'map' ? (
+          <HubMap hubs={hubs} />
+        ) : section === 'hours' ? (
+          <HubHours hubs={hubs} />
         ) : (
           <View style={styles.list}>
             {hubs.map((hub) => (
@@ -121,6 +177,152 @@ export default function LocationsScreen() {
         />
       </View>
     </ScrollView>
+  );
+}
+
+/**
+ * The network on a map.
+ *
+ * Pins are neighbourhood centres, not surveyed doors, and the caveat below is
+ * not decoration: someone who trusts a pin to 10m and finds nothing there is
+ * standing in the street with a parcel. "Get Directions" on the Locations tab
+ * searches the full street address instead, which is the accurate route.
+ */
+function HubMap({ hubs }: { hubs: Hub[] }) {
+  const theme = useTheme();
+
+  const markers: MapMarker[] = hubs.flatMap((hub) => {
+    const position = hubPosition(hub);
+    if (!position) return [];
+
+    return [
+      {
+        lat: position.lat,
+        lng: position.lng,
+        label: `${hub.name} — ${hub.area}`,
+        tone: hub.flagship ? ('pickup' as const) : ('dropoff' as const),
+      },
+    ];
+  });
+
+  const missing = hubs.length - markers.length;
+
+  if (markers.length === 0) {
+    return (
+      <EmptyState
+        icon={(color, size) => <MapPinned color={color} size={size} />}
+        title="No positions yet"
+        message="We don't have map coordinates for these hubs. The Locations tab lists their full addresses."
+      />
+    );
+  }
+
+  return (
+    <View style={styles.mapBlock}>
+      <MapView markers={markers} height={380} />
+
+      {hasApproximatePositions(hubs) && (
+        <View style={[styles.notice, { backgroundColor: theme.warningSoft }]}>
+          <TriangleAlert color={theme.warningOnSoft} size={15} />
+          <Text style={[styles.noticeText, { color: theme.warningOnSoft }]}>
+            Pins show the neighbourhood, not the exact door — they can be a few hundred metres out.
+            Use Get Directions on the Locations tab to navigate to the address.
+          </Text>
+        </View>
+      )}
+
+      {missing > 0 && (
+        <Text style={[styles.mapFootnote, { color: theme.textMuted }]}>
+          {missing} {missing === 1 ? 'hub is' : 'hubs are'} not on the map yet.
+        </Text>
+      )}
+
+      <View style={styles.legend}>
+        <LegendDot color="#16A34A" label="Flagship hub" />
+        <LegendDot color="#0077B6" label="Counter" />
+      </View>
+    </View>
+  );
+}
+
+function LegendDot({ color, label }: { color: string; label: string }) {
+  const theme = useTheme();
+
+  return (
+    <View style={styles.legendItem}>
+      <View style={[styles.legendDot, { backgroundColor: color }]} />
+      <Text style={[styles.legendText, { color: theme.textSecondary }]}>{label}</Text>
+    </View>
+  );
+}
+
+/**
+ * Opening hours, with a live open/closed badge.
+ *
+ * The badge is computed in Africa/Lagos rather than from the device clock — see
+ * `nigeriaNow`. A hub's hours belong to the hub, not to whoever is looking.
+ */
+function HubHours({ hubs }: { hubs: Hub[] }) {
+  const theme = useTheme();
+
+  /*
+   * Re-read the clock every minute. Without this a page left open at 5:58pm
+   * still says "Open now" at 7pm — a stale badge that sends someone out to a
+   * closed shutter is worse than no badge.
+   */
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    const timer = setInterval(() => setTick((value) => value + 1), 60_000);
+    return () => clearInterval(timer);
+  }, []);
+
+  return (
+    <Card style={styles.hoursCard}>
+      {hubs.map((hub, index) => {
+        const state = openState(hub);
+        const label = openLabel(state);
+
+        return (
+          <View
+            key={hub.id}
+            style={[
+              styles.hoursRow,
+              index > 0 && {
+                borderTopWidth: StyleSheet.hairlineWidth,
+                borderTopColor: theme.border,
+              },
+            ]}>
+            <View style={styles.hoursText}>
+              <Text style={[styles.hubName, { color: theme.text }]}>{hub.name}</Text>
+              <Text style={[styles.hubArea, { color: theme.textMuted }]}>{hub.area}</Text>
+              <View style={styles.hoursLine}>
+                <Clock color={theme.textMuted} size={13} />
+                <Text style={[styles.detailValue, { color: theme.textSecondary }]}>
+                  {hub.hours}
+                </Text>
+              </View>
+            </View>
+
+            {/*
+              Only when the hours actually parsed. A badge is a claim about
+              right now; guessing one from a string we could not read would be
+              worse than staying quiet.
+            */}
+            {label && (
+              <Badge
+                label={label}
+                tone={state.known && state.open ? 'success' : 'neutral'}
+                uppercase={false}
+              />
+            )}
+          </View>
+        );
+      })}
+
+      <Text style={[styles.hoursFootnote, { color: theme.textMuted }]}>
+        Times are West Africa Time (UTC+1). Public holidays may differ — call ahead if it matters.
+      </Text>
+    </Card>
   );
 }
 
@@ -369,5 +571,75 @@ const styles = StyleSheet.create({
   },
   cta: {
     marginTop: Spacing.four,
+  },
+  sectionTabs: {
+    marginTop: Spacing.three,
+  },
+
+  // Map
+  mapBlock: {
+    gap: Spacing.three - 2,
+  },
+  notice: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: Spacing.two,
+    padding: Spacing.three - 2,
+    borderRadius: Radius.md,
+  },
+  noticeText: {
+    ...Typography.meta,
+    ...font(600),
+    flex: 1,
+    lineHeight: 19,
+  },
+  mapFootnote: {
+    ...Typography.caption,
+  },
+  legend: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: Spacing.three,
+  },
+  legendItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.one + 2,
+  },
+  legendDot: {
+    width: 12,
+    height: 12,
+    borderRadius: 6,
+  },
+  legendText: {
+    ...Typography.caption,
+    ...font(600),
+  },
+
+  // Hours
+  hoursCard: {
+    gap: 0,
+  },
+  hoursRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: Spacing.three,
+    paddingVertical: Spacing.three - 2,
+  },
+  hoursText: {
+    flex: 1,
+    gap: Spacing.half,
+  },
+  hoursLine: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.one + 2,
+    marginTop: Spacing.half,
+  },
+  hoursFootnote: {
+    ...Typography.caption,
+    lineHeight: 18,
+    paddingTop: Spacing.three - 2,
   },
 });

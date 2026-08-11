@@ -6,6 +6,7 @@ import {
   FileText,
   IdCard,
   Landmark,
+  MailWarning,
   MapPin,
   PhoneCall,
   ShieldAlert,
@@ -359,6 +360,22 @@ function ApplicationCard({
         {application.baseCity ?? application.state}
       </Row>
 
+      {/*
+        Only shown when the confirmation email failed.
+        The applicant was told on screen to check their inbox, so a failure here
+        means someone is sitting in silence believing the application vanished.
+        Whoever works this queue is the only person in a position to notice.
+      */}
+      {!!application.confirmationEmailError && (
+        <View style={[styles.emailWarning, { backgroundColor: theme.dangerSoft }]}>
+          <MailWarning color={theme.dangerOnSoft} size={15} />
+          <Text style={[styles.emailWarningText, { color: theme.dangerOnSoft }]}>
+            Confirmation email did not send — {application.email} was never told we received this.
+            Contact them directly.
+          </Text>
+        </View>
+      )}
+
       <Pressable
         onPress={() => setExpanded((value) => !value)}
         accessibilityRole="button"
@@ -549,6 +566,14 @@ const styles = StyleSheet.create({
   cardHeading: { flex: 1, gap: 2 },
   name: { ...Typography.sectionTitle },
   reference: { ...Typography.meta },
+  emailWarning: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: Spacing.one + 2,
+    padding: Spacing.two,
+    borderRadius: Radius.md,
+  },
+  emailWarningText: { ...Typography.meta, ...font(600), flex: 1, lineHeight: 18 },
   waitRow: { flexDirection: 'row', alignItems: 'center', gap: Spacing.one + 2 },
   waitText: { ...Typography.meta, ...font(600) },
   row: { flexDirection: 'row', alignItems: 'flex-start', gap: Spacing.two, paddingVertical: 3 },

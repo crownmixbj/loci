@@ -6,29 +6,90 @@ produces nonsense like "Cannot find name 'Deno'".
 
 ## notify-application
 
-Posts a Slack message whenever a driver application is inserted. Called by the
-`on_driver_application_created` trigger in `../05_storage_and_alerts.sql`.
+Runs the moment a driver application is inserted, called by the
+`on_driver_application_created` trigger in `../05_storage_and_alerts.sql`. It
+does two independent things:
+
+1. **Emails the applicant a confirmation.** The app tells them on screen to
+   check their inbox, so something has to actually arrive.
+2. **Posts a Slack alert** so someone knows there is a queue to work.
+
+They cannot break each other: a dead Slack webhook must not stop an applicant's
+confirmation, and a missing mail provider must not silence ops.
+
+`email.ts` holds the template and is deliberately free of Deno globals, so
+`npm run verify:email` (see below) can render and assert on it under node.
+
+### Install the CLI
+
+⚠ `npm install -g supabase` does **not** work. Supabase deliberately blocks the
+global npm install and the CLI errors with "Installing Supabase CLI as a global
+module is not supported." On macOS, use Homebrew:
+
+```bash
+brew install supabase/tap/supabase
+supabase --version
+```
+
+Or skip installing anything and prefix every command below with `npx`:
+
+```bash
+npx supabase --version
+```
 
 ### Deploy
 
 ```bash
-npm install -g supabase          # if you don't have the CLI
 supabase login
-supabase link --project-ref <your-project-ref>
+supabase link --project-ref <your-project-ref>   # the ref is in your dashboard URL
 
 supabase functions deploy notify-application
+```
 
-# The webhook URL is a secret — anyone with it can post to your channel.
+### Secrets
+
+```bash
+# --- Applicant confirmation email -------------------------------------------
+supabase secrets set RESEND_API_KEY="re_..."
+supabase secrets set LOCI_FROM_EMAIL="LOCI <noreply@yourdomain.com>"
+
+# Optional but strongly recommended: replies land somewhere a human reads.
+supabase secrets set LOCI_SUPPORT_EMAIL="support@yourdomain.com"
+
+# --- Ops alert ---------------------------------------------------------------
 supabase secrets set SLACK_WEBHOOK_URL="https://hooks.slack.com/services/..."
 
-# Optional: makes the alert link straight to the review dashboard.
+# Shared: adds a "Track your application" button and links the Slack alert
+# straight to the review dashboard.
 supabase secrets set LOCI_APP_URL="https://your-app.pages.dev"
 ```
 
-Create the webhook at <https://api.slack.com/messaging/webhooks> — "Create an
-app" → "Incoming Webhooks" → add one to the channel you want.
+`SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` are injected automatically — you
+do not set those.
 
-### Then point the trigger at it
+Prefer not to use the CLI for this? The same secrets can be added in the
+dashboard under **Edge Functions → Secrets**. Deploying the function itself
+still needs the CLI.
+
+#### Why a mail provider at all
+
+Supabase's built-in mailer only sends the **auth** templates (confirm sign-up,
+password recovery, magic link) and is rate-limited to a couple of messages an
+hour on the free tier. It cannot send a driver-application confirmation. A
+transactional provider is required.
+
+[Resend](https://resend.com) is what this function calls. Sign up, **verify
+your sending domain** (this is the step people skip, and unverified domains go
+straight to spam), then create an API key.
+
+Swapping to SendGrid or Postmark means editing `sendApplicantEmail` in
+`index.ts` — one function. The template and the orchestration do not know which
+provider is in use.
+
+⚠ `LOCI_FROM_EMAIL` must be on a domain you have verified with the provider.
+Sending as `@gmail.com` will fail DMARC and be rejected or junked.
+
+### Point the trigger at the function
 
 In the SQL editor, once:
 
@@ -48,7 +109,28 @@ bypasses every RLS policy — it must never reach `.env` or the app bundle.
 supabase functions logs notify-application
 ```
 
-Submitting a driver application should post to Slack within a second or two. If
-nothing arrives, the trigger swallows its own errors by design — an alert must
-never roll back an application — so look in the Postgres logs for a
-`notify_new_driver_application failed` warning.
+Submitting a driver application should email the applicant and post to Slack
+within a second or two.
+
+If nothing arrives, the trigger swallows its own errors by design — an alert
+must never roll back an application — so look in three places:
+
+1. **Postgres logs** for a `notify_new_driver_application failed` warning. That
+   means the trigger never reached the function.
+2. **Function logs**, as above. The response body names which half failed.
+3. **The application row itself**:
+
+   ```sql
+   select reference, email, confirmation_email_sent_at, confirmation_email_error
+   from public.driver_applications
+   order by submitted_at desc
+   limit 20;
+   ```
+
+   `confirmation_email_error` is also rendered in the admin dashboard, so
+   whoever works the review queue sees that an applicant was never told their
+   application arrived. Both columns null means no provider is configured yet —
+   that is a deployment state, not a delivery failure.
+
+Requires `../06_application_email.sql`, which adds those two columns and the
+trigger that stops a client writing to them.

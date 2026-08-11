@@ -1,12 +1,21 @@
 import { usePathname, useRouter } from 'expo-router';
 import {
   House,
-  ClipboardList,
+  Archive,
+  BellRing,
+  BookOpen,
+  ChevronDown,
+  Clock,
   Info,
+  LayoutDashboard,
+  LifeBuoy,
+  Map,
   MapPinned,
   Menu,
   PackagePlus,
   PackageSearch,
+  Radar,
+  Scale,
   ShieldCheck,
   Truck,
   LogOut,
@@ -14,7 +23,7 @@ import {
   UserRound,
   X,
 } from 'lucide-react-native';
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   Modal,
   Platform,
@@ -27,6 +36,7 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import { HUB_SECTION_LABELS } from '@/constants/hubs';
 import { Elevation, Radius, Spacing, Typography, font } from '@/constants/theme';
 import { AppStoreModal, detectStorePlatform, openStore } from '@/components/ui/app-store-modal';
 import { useTheme } from '@/hooks/use-theme';
@@ -66,8 +76,17 @@ function initials(name: string | undefined): string {
  * from 877px to 997px, which silently invalidated the previous 900 breakpoint
  * and would have put the avatar back on the capsule's rounded edge between 900
  * and 997. Re-measure after any change to `NAV_LINKS`.
+ *
+ * The Hubs caret is the most recent change: a 15px chevron plus its padding and
+ * the row gap costs 19px, which against the recorded 997px left only 4px of
+ * slack under the old 1020 threshold. Both labelled tiers moved up 20px to put
+ * the headroom back — 4px is not a margin, it is a rounding error waiting to
+ * push the avatar onto the capsule's edge again.
+ *
+ * The caret is rendered only in the labelled tier, so the icon-only thresholds
+ * are untouched.
  */
-const LABEL_BREAKPOINT = 1020;
+const LABEL_BREAKPOINT = 1040;
 const ICON_LINK_BREAKPOINT = 690;
 
 /**
@@ -78,7 +97,7 @@ const ICON_LINK_BREAKPOINT = 690;
  * than push every user to icons early, the thresholds move only for the people
  * who actually have the extra link.
  */
-const ADMIN_LABEL_BREAKPOINT = 1140;
+const ADMIN_LABEL_BREAKPOINT = 1160;
 const ADMIN_ICON_LINK_BREAKPOINT = 730;
 /** Below this the capsule tightens its padding to survive a 320px phone. */
 const TIGHT_BREAKPOINT = 400;
@@ -93,16 +112,60 @@ type NavHref =
   | '/available-packages'
   | '/book'
   | '/driver'
+  | '/driver-guidelines'
   | '/driver-signup'
+  | '/driver-updates'
+  | '/legal'
   | '/locations'
   | '/my-packages'
+  | '/support'
+  | '/tracking'
   | '/admin';
 
 /** Home matches exactly; the rest match their prefix. */
-function isActive(pathname: string, href: NavHref): boolean {
+function matchesHref(pathname: string, href: string): boolean {
   if (href === '/') return pathname === '/' || pathname === '/index';
   return pathname === href || pathname.startsWith(`${href}/`);
 }
+
+/**
+ * Whether a link should read as current.
+ *
+ * A grouped link owns several routes: "Jobs & Drivers" must stay underlined on
+ * the portal, the updates page and the guidelines, not only on the one page its
+ * label happens to point at. Without `also`, four of the five destinations
+ * behind that dropdown would leave the nav showing nothing as selected.
+ */
+function isActive(pathname: string, link: Pick<NavLink, 'href' | 'also'>): boolean {
+  if (matchesHref(pathname, link.href)) return true;
+  return (link.also ?? []).some((href) => matchesHref(pathname, href));
+}
+
+/**
+ * A child of a nav link.
+ *
+ * Two shapes, because the two dropdowns differ in kind. Hubs is one screen with
+ * three views, so its children carry a `section` query parameter. Jobs &
+ * Drivers groups four genuinely separate screens, so its children carry an
+ * `href`. Forcing either into the other's shape would mean a fake route or a
+ * screen doing four unrelated jobs.
+ */
+type NavChild = {
+  key: string;
+  label: string;
+  description: string;
+  icon: (color: string, size: number) => React.ReactNode;
+  href: NavHref;
+  /**
+   * Opens a specific view of `href`, as `?section=`.
+   *
+   * A plain string rather than a union of every screen's sections: the value is
+   * a query parameter, and each screen already validates it with its own
+   * `parse…Section` that falls back safely. Enumerating them here would mean
+   * this file had to know about every screen's internals.
+   */
+  section?: string;
+};
 
 type NavLink = {
   key: string;
@@ -110,6 +173,16 @@ type NavLink = {
   href: NavHref;
   icon: (color: string, size: number) => React.ReactNode;
   description: string;
+  children?: NavChild[];
+  /**
+   * Extra path prefixes this link owns, for the active state only.
+   *
+   * Deliberately looser than `NavHref`: `/parcel` is a dynamic route
+   * (`/parcel/[id]`) that nothing navigates to by that bare path, so it is not
+   * a valid push target — but a parcel detail page still belongs to Shipments
+   * and should keep it underlined.
+   */
+  also?: string[];
 };
 
 /**
@@ -125,39 +198,103 @@ const NAV_LINKS: NavLink[] = [
     description: 'Track parcels and browse services',
   },
   {
-    // Public-facing driver entry point — /driver is the signed-in driver's feed.
-    key: 'drivers',
-    label: 'Drivers',
-    href: '/driver-signup',
-    icon: (color, size) => <Truck color={color} size={size} />,
-    description: 'Apply to deliver with LOCI',
-  },
-  {
-    key: 'book',
-    label: 'Send Parcel',
-    href: '/book',
-    icon: (color, size) => <PackagePlus color={color} size={size} />,
-    description: 'Post a new delivery request',
-  },
-  {
-    key: 'available',
-    label: 'Find Jobs',
+    /*
+      "Drivers" and "Find Jobs" used to be two top-level entries that led to
+      halves of the same job: one to apply, one to work. Someone mid-application
+      had no reason to know which of the two held their status, and an approved
+      driver had to remember that their accepted deliveries lived under a third
+      label entirely. One entry, four destinations.
+    */
+    key: 'jobs-drivers',
+    label: 'Jobs & Drivers',
+    // The parent goes to the open-jobs board: of the four, it is the one people
+    // arrive wanting, and it is the only one that is useful signed out.
     href: '/available-packages',
-    icon: (color, size) => <PackageSearch color={color} size={size} />,
-    description: 'Browse open jobs by route',
+    icon: (color, size) => <Truck color={color} size={size} />,
+    description: 'Find work, apply to drive, track your application',
+    also: ['/driver', '/driver-signup', '/driver-updates', '/driver-guidelines'],
+    children: [
+      {
+        key: 'find',
+        label: 'Find Open Jobs',
+        description: 'Browse open deliveries by route',
+        href: '/available-packages',
+        icon: (color, size) => <PackageSearch color={color} size={size} />,
+      },
+      {
+        key: 'portal',
+        label: 'Driver Portal / Dashboard',
+        description: 'Your details, earnings and accepted deliveries',
+        href: '/driver',
+        icon: (color, size) => <LayoutDashboard color={color} size={size} />,
+      },
+      {
+        key: 'updates',
+        label: 'Be a Driver / Updates',
+        description: 'Apply to drive, or track an application you sent',
+        href: '/driver-updates',
+        icon: (color, size) => <BellRing color={color} size={size} />,
+      },
+      {
+        key: 'guidelines',
+        label: 'Driver Guidelines & FAQs',
+        description: 'What we expect, and the questions people ask',
+        href: '/driver-guidelines',
+        icon: (color, size) => <BookOpen color={color} size={size} />,
+      },
+    ],
   },
   {
     /*
-      Role-aware, and the reason a claimed job used to vanish: /driver had no
-      nav entry at all, so after accepting one the only routes back were the
-      confirmation screen and the avatar menu. Navigate away and the job was
-      effectively lost.
+      Everything sender-side, the way Jobs & Drivers holds everything
+      driver-side.
+
+      "My Parcels" was a separate top-level entry until this grouped it. Keeping
+      both would have put /my-packages in the nav twice — once on its own and
+      once as two of the four children here — which is the duplication the
+      driver merge already removed.
     */
-    key: 'mine',
-    label: 'My Jobs',
-    href: '/driver',
-    icon: (color, size) => <ClipboardList color={color} size={size} />,
-    description: "Deliveries you've accepted",
+    key: 'shipments',
+    label: 'Shipments',
+    // Sending is what people arrive wanting, and it is the only one of the four
+    // that is worth anything before you have posted a parcel.
+    href: '/book',
+    icon: (color, size) => <PackagePlus color={color} size={size} />,
+    description: 'Send a parcel, track it, and see what you have sent',
+    // `/parcel` covers the detail screen at `/parcel/[id]`.
+    also: ['/my-packages', '/tracking', '/parcel'],
+    children: [
+      {
+        key: 'new',
+        label: 'Send a New Parcel',
+        description: 'The booking form, start to finish',
+        href: '/book',
+        icon: (color, size) => <PackagePlus color={color} size={size} />,
+      },
+      {
+        key: 'active',
+        label: 'Active / In-Transit Parcels',
+        description: "Anything that hasn't arrived yet",
+        href: '/my-packages',
+        section: 'active',
+        icon: (color, size) => <Truck color={color} size={size} />,
+      },
+      {
+        key: 'history',
+        label: 'Shipment History / Archives',
+        description: 'Everything delivered, oldest to newest',
+        href: '/my-packages',
+        section: 'history',
+        icon: (color, size) => <Archive color={color} size={size} />,
+      },
+      {
+        key: 'tracking',
+        label: 'Tracking / Proof of Delivery',
+        description: 'Look up a parcel by its tracking ID',
+        href: '/tracking',
+        icon: (color, size) => <Radar color={color} size={size} />,
+      },
+    ],
   },
   {
     key: 'locations',
@@ -165,6 +302,32 @@ const NAV_LINKS: NavLink[] = [
     href: '/locations',
     icon: (color, size) => <MapPinned color={color} size={size} />,
     description: 'Drop-off and collection points',
+    children: [
+      {
+        key: 'locations',
+        label: HUB_SECTION_LABELS.locations,
+        description: 'Every counter, by city',
+        href: '/locations',
+        section: 'locations',
+        icon: (color, size) => <MapPinned color={color} size={size} />,
+      },
+      {
+        key: 'map',
+        label: HUB_SECTION_LABELS.map,
+        description: 'See the network on a map',
+        href: '/locations',
+        section: 'map',
+        icon: (color, size) => <Map color={color} size={size} />,
+      },
+      {
+        key: 'hours',
+        label: HUB_SECTION_LABELS.hours,
+        description: "When each hub is open, and what's open now",
+        href: '/locations',
+        section: 'hours',
+        icon: (color, size) => <Clock color={color} size={size} />,
+      },
+    ],
   },
   {
     /*
@@ -182,7 +345,31 @@ const NAV_LINKS: NavLink[] = [
     label: 'About Us',
     href: '/about',
     icon: (color, size) => <Info color={color} size={size} />,
-    description: 'Our mission and what sets us apart',
+    description: 'Our mission, support, and the legal bits',
+    also: ['/support', '/legal'],
+    children: [
+      {
+        key: 'about',
+        label: 'About LOCI',
+        description: 'Who we are and how the network works',
+        href: '/about',
+        icon: (color, size) => <Info color={color} size={size} />,
+      },
+      {
+        key: 'support',
+        label: 'Support / Contact Us',
+        description: 'Get help, or reach a person',
+        href: '/support',
+        icon: (color, size) => <LifeBuoy color={color} size={size} />,
+      },
+      {
+        key: 'legal',
+        label: 'Terms of Service & Privacy Policy',
+        description: 'What we collect, who sees it, and the rules',
+        href: '/legal',
+        icon: (color, size) => <Scale color={color} size={size} />,
+      },
+    ],
   },
 ];
 
@@ -195,24 +382,19 @@ export function AppNavBar() {
   const pathname = usePathname();
   const [menuOpen, setMenuOpen] = useState(false);
   const [storeModalOpen, setStoreModalOpen] = useState(false);
+  /** Key of the link whose submenu is showing, or null. Only ever one at a time. */
+  const [openSubmenu, setOpenSubmenu] = useState<string | null>(null);
   const { role, setRole, user, isAuthenticated, isAdmin, signOut } = useSession();
   // Labels need room; below that the links drop to icons, and below *that* they
   // leave the capsule entirely — the drawer already lists every one of them, so
   // nothing becomes unreachable.
+  const navLinks = NAV_LINKS.filter((link) => link.key !== 'admin' || isAdmin);
+
   /*
-   * The personal entry follows the role: a sender wants their parcels, a driver
-   * wants the jobs they're carrying. Same slot, so the bar doesn't reflow.
+   * A submenu left open across a navigation would hang over the new page with
+   * no obvious way to dismiss it — `router.push` does not unmount the nav bar.
    */
-  const navLinks = NAV_LINKS.filter((link) => link.key !== 'admin' || isAdmin).map((link) =>
-    link.key === 'mine' && role === 'sender'
-      ? {
-          ...link,
-          label: 'My Parcels',
-          href: '/my-packages' as NavHref,
-          description: "Parcels you've sent",
-        }
-      : link,
-  );
+  useEffect(() => setOpenSubmenu(null), [pathname]);
 
   const showLabels = width >= (isAdmin ? ADMIN_LABEL_BREAKPOINT : LABEL_BREAKPOINT);
   const showInlineLinks = width >= (isAdmin ? ADMIN_ICON_LINK_BREAKPOINT : ICON_LINK_BREAKPOINT);
@@ -298,6 +480,19 @@ export function AppNavBar() {
     router.push(href);
   };
 
+  /**
+   * A submenu entry. Either a route of its own, or a section of one.
+   *
+   * The `?section=` form matters for Hubs: pushing `/locations` while already on
+   * `/locations` is a no-op, so without the parameter the submenu would appear
+   * dead to anyone already on that screen.
+   */
+  const goToChild = (child: NavChild) => {
+    setMenuOpen(false);
+    setOpenSubmenu(null);
+    router.push((child.section ? `${child.href}?section=${child.section}` : child.href) as NavHref);
+  };
+
   return (
     <>
       <View
@@ -338,56 +533,20 @@ export function AppNavBar() {
               !showInlineLinks && styles.linksHidden,
             ]}>
             {showInlineLinks &&
-              navLinks.map((link) => {
-                const active = isActive(pathname, link.href);
-                // Deep navy at rest, brand blue when active — both clear AA on
-                // the white capsule, and navy reads far better than slate on a
-                // large display.
-                //
-                // The colour shift alone is NOT the indicator: navy and brand
-                // blue sit 2.37:1 apart, under the 3:1 needed to read as two
-                // different colours, and colour on its own fails WCAG 1.4.1
-                // regardless. The underline below is what actually marks state.
-                const color = active ? theme.primary : NavLinkColor;
-
-                return (
-                  <Pressable
-                    key={link.key}
-                    onPress={() => go(link.href)}
-                    accessibilityRole="link"
-                    accessibilityLabel={link.label}
-                    accessibilityState={{ selected: active }}
-                    style={({ pressed }) => [
-                      styles.link,
-                      !showLabels && styles.linkIconOnly,
-                      // Compact mode: the soft fill is 1.15:1 on white — all but
-                      // invisible on its own — so the ring carries the state.
-                      active &&
-                        !showLabels && {
-                          backgroundColor: theme.primarySoft,
-                          borderColor: theme.primary,
-                        },
-                      pressed && styles.pressed,
-                    ]}>
-                    {!showLabels && link.icon(color, 19)}
-                    {showLabels && (
-                      <View style={styles.linkLabel}>
-                        <Text style={[styles.linkText, { color }]}>{link.label}</Text>
-                        {/*
-                        Always rendered, transparent when inactive, so switching
-                        pages never nudges the row by 2px.
-                      */}
-                        <View
-                          style={[
-                            styles.underline,
-                            { backgroundColor: active ? theme.primary : 'transparent' },
-                          ]}
-                        />
-                      </View>
-                    )}
-                  </Pressable>
-                );
-              })}
+              navLinks.map((link, index) => (
+                <NavLinkItem
+                  key={link.key}
+                  link={link}
+                  active={isActive(pathname, link)}
+                  showLabels={showLabels}
+                  // The rightmost link's menu opens leftwards; see `alignEnd`.
+                  alignEnd={index >= navLinks.length - 2}
+                  submenuOpen={openSubmenu === link.key}
+                  onSubmenuChange={(open) => setOpenSubmenu(open ? link.key : null)}
+                  onPress={() => go(link.href)}
+                  onSelectChild={goToChild}
+                />
+              ))}
           </View>
 
           <View style={[styles.actions, tight && styles.actionsTight]}>
@@ -480,6 +639,7 @@ export function AppNavBar() {
         open={menuOpen}
         onClose={() => setMenuOpen(false)}
         onNavigate={go}
+        onNavigateChild={goToChild}
         onGetApp={handleGetApp}
         onAuth={openAuth}
         onSignOut={handleSignOut}
@@ -497,10 +657,200 @@ export function AppNavBar() {
   );
 }
 
+/**
+ * One link in the capsule, with an optional submenu.
+ *
+ * The submenu is deliberately not hover-only. Hover does not exist on a phone,
+ * and a menu that only opens on hover is unreachable for anyone using touch, a
+ * keyboard, or a screen reader — so hover is an accelerator on web and the
+ * caret is a real, focusable disclosure button everywhere.
+ *
+ * The link and the caret are separate controls, which is the standard pattern:
+ * "Hubs" goes to the Hubs page, the caret reveals the three views of it.
+ * Merging them would mean you cannot reach the page without opening the menu.
+ */
+function NavLinkItem({
+  link,
+  active,
+  showLabels,
+  submenuOpen,
+  onSubmenuChange,
+  onPress,
+  onSelectChild,
+  alignEnd,
+}: {
+  link: NavLink;
+  active: boolean;
+  showLabels: boolean;
+  /**
+   * Opens the menu leftwards from the link's right edge.
+   *
+   * A 296px panel hanging right from one of the last links runs past the
+   * capsule and off the viewport — there is only the role pill, the avatar and
+   * the hamburger to its right. Anchoring the far end instead keeps it on
+   * screen without needing to measure the viewport.
+   */
+  alignEnd: boolean;
+  submenuOpen: boolean;
+  onSubmenuChange: (open: boolean) => void;
+  onPress: () => void;
+  onSelectChild: (child: NavChild) => void;
+}) {
+  const theme = useTheme();
+
+  /*
+   * Closing on hover-out is delayed. The submenu sits a few pixels below the
+   * link, and the pointer crosses that gap on the way down — closing instantly
+   * means the menu vanishes underneath the cursor before it can be clicked.
+   */
+  const closeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const cancelClose = () => {
+    if (closeTimer.current) {
+      clearTimeout(closeTimer.current);
+      closeTimer.current = null;
+    }
+  };
+
+  useEffect(() => cancelClose, []);
+
+  const hoverOpen = () => {
+    if (Platform.OS !== 'web' || !link.children) return;
+    cancelClose();
+    onSubmenuChange(true);
+  };
+
+  const hoverClose = () => {
+    if (Platform.OS !== 'web' || !link.children) return;
+    cancelClose();
+    closeTimer.current = setTimeout(() => onSubmenuChange(false), 220);
+  };
+
+  // Deep navy at rest, brand blue when active — both clear AA on the white
+  // capsule, and navy reads far better than slate on a large display.
+  //
+  // The colour shift alone is NOT the indicator: navy and brand blue sit 2.37:1
+  // apart, under the 3:1 needed to read as two different colours, and colour on
+  // its own fails WCAG 1.4.1 regardless. The underline is what marks state.
+  const color = active ? theme.primary : NavLinkColor;
+
+  // Only where there is room for it. At icon-only widths a caret beside a 19px
+  // glyph is unreadable, so the drawer carries the children instead — and the
+  // drawer is always one tap away at those widths.
+  const showCaret = Boolean(link.children) && showLabels;
+
+  return (
+    <View
+      onPointerEnter={hoverOpen}
+      onPointerLeave={hoverClose}
+      // The raised z-index applies only while open, so a closed link never sits
+      // above its neighbours and steal their taps.
+      style={[styles.linkWrapper, submenuOpen && styles.linkWrapperOpen]}>
+      <View style={styles.linkRow}>
+        <Pressable
+          onPress={onPress}
+          accessibilityRole="link"
+          accessibilityLabel={link.label}
+          accessibilityState={{ selected: active }}
+          style={({ pressed }) => [
+            styles.link,
+            !showLabels && styles.linkIconOnly,
+            // Compact mode: the soft fill is 1.15:1 on white — all but invisible
+            // on its own — so the ring carries the state.
+            active &&
+              !showLabels && {
+                backgroundColor: theme.primarySoft,
+                borderColor: theme.primary,
+              },
+            pressed && styles.pressed,
+          ]}>
+          {!showLabels && link.icon(color, 19)}
+          {showLabels && (
+            <View style={styles.linkLabel}>
+              <Text style={[styles.linkText, { color }]}>{link.label}</Text>
+              {/*
+                Always rendered, transparent when inactive, so switching pages
+                never nudges the row by 2px.
+              */}
+              <View
+                style={[
+                  styles.underline,
+                  { backgroundColor: active ? theme.primary : 'transparent' },
+                ]}
+              />
+            </View>
+          )}
+        </Pressable>
+
+        {showCaret && (
+          <Pressable
+            onPress={() => {
+              cancelClose();
+              onSubmenuChange(!submenuOpen);
+            }}
+            accessibilityRole="button"
+            accessibilityLabel={`${link.label} menu`}
+            accessibilityState={{ expanded: submenuOpen }}
+            hitSlop={8}
+            style={({ pressed }) => [styles.caret, pressed && styles.pressed]}>
+            {/*
+              Rotating the chevron rather than swapping it for an up-chevron:
+              one glyph, and the direction always matches the open state even
+              mid-animation.
+            */}
+            <View style={submenuOpen ? styles.caretOpen : undefined}>
+              <ChevronDown color={color} size={15} />
+            </View>
+          </Pressable>
+        )}
+      </View>
+
+      {submenuOpen && link.children && (
+        <View
+          onPointerEnter={cancelClose}
+          onPointerLeave={hoverClose}
+          style={[
+            styles.submenu,
+            alignEnd ? styles.submenuEnd : styles.submenuStart,
+            {
+              backgroundColor: theme.navBackground,
+              borderColor: theme.navBorder,
+              shadowColor: theme.shadow,
+            },
+            Elevation.raised,
+          ]}>
+          {link.children.map((child) => (
+            <Pressable
+              key={child.key}
+              onPress={() => onSelectChild(child)}
+              accessibilityRole="link"
+              accessibilityLabel={child.label}
+              style={({ pressed, hovered }: { pressed: boolean; hovered?: boolean }) => [
+                styles.submenuItem,
+                (pressed || hovered) && { backgroundColor: theme.surfaceMuted },
+              ]}>
+              <View style={[styles.submenuIcon, { backgroundColor: theme.primarySoft }]}>
+                {child.icon(theme.primaryOnSoft, 16)}
+              </View>
+              <View style={styles.submenuText}>
+                <Text style={[styles.submenuLabel, { color: theme.text }]}>{child.label}</Text>
+                <Text style={[styles.submenuDescription, { color: theme.textMuted }]}>
+                  {child.description}
+                </Text>
+              </View>
+            </Pressable>
+          ))}
+        </View>
+      )}
+    </View>
+  );
+}
+
 function SideMenu({
   open,
   onClose,
   onNavigate,
+  onNavigateChild,
   onGetApp,
   onAuth,
   onSignOut,
@@ -511,6 +861,7 @@ function SideMenu({
   open: boolean;
   onClose: () => void;
   onNavigate: (href: NavHref) => void;
+  onNavigateChild: (child: NavChild) => void;
   onGetApp: () => void;
   onAuth: () => void;
   onSignOut: () => void;
@@ -554,49 +905,78 @@ function SideMenu({
 
           <ScrollView showsVerticalScrollIndicator={false} style={styles.drawerScroll}>
             {links.map((link) => {
-              const active = isActive(pathname, link.href);
+              const active = isActive(pathname, link);
 
               return (
-                <Pressable
-                  key={link.key}
-                  onPress={() => onNavigate(link.href)}
-                  accessibilityRole="link"
-                  accessibilityState={{ selected: active }}
-                  style={({ pressed }) => [
-                    styles.drawerItem,
-                    { borderBottomColor: theme.navBorder },
-                    active && { backgroundColor: theme.primarySoft },
-                    pressed && { backgroundColor: theme.surfaceMuted },
-                  ]}>
-                  {/*
+                <View key={link.key}>
+                  <Pressable
+                    onPress={() => onNavigate(link.href)}
+                    accessibilityRole="link"
+                    accessibilityState={{ selected: active }}
+                    style={({ pressed }) => [
+                      styles.drawerItem,
+                      { borderBottomColor: theme.navBorder },
+                      active && { backgroundColor: theme.primarySoft },
+                      pressed && { backgroundColor: theme.surfaceMuted },
+                    ]}>
+                    {/*
                     Left rule marking the current page. The tinted row alone is
                     1.15:1 against the drawer — the bar is what's actually
                     visible, and it means the state isn't carried by colour
                     alone.
                   */}
-                  <View
-                    style={[
-                      styles.drawerActiveBar,
-                      { backgroundColor: active ? theme.primary : 'transparent' },
-                    ]}
-                  />
-                  <View style={[styles.drawerIcon, { backgroundColor: theme.primarySoft }]}>
-                    {link.icon(theme.primaryOnSoft, 18)}
-                  </View>
-                  <View style={styles.drawerItemText}>
-                    <Text
+                    <View
                       style={[
-                        styles.drawerLabel,
-                        { color: active ? theme.primary : theme.text },
-                        active && font(700),
+                        styles.drawerActiveBar,
+                        { backgroundColor: active ? theme.primary : 'transparent' },
+                      ]}
+                    />
+                    <View style={[styles.drawerIcon, { backgroundColor: theme.primarySoft }]}>
+                      {link.icon(theme.primaryOnSoft, 18)}
+                    </View>
+                    <View style={styles.drawerItemText}>
+                      <Text
+                        style={[
+                          styles.drawerLabel,
+                          { color: active ? theme.primary : theme.text },
+                          active && font(700),
+                        ]}>
+                        {link.label}
+                      </Text>
+                      <Text style={[styles.drawerDescription, { color: theme.textMuted }]}>
+                        {link.description}
+                      </Text>
+                    </View>
+                  </Pressable>
+
+                  {/*
+                    Children are always expanded here rather than hidden behind
+                    a second tap. The drawer is the *only* route to them at
+                    phone widths — there is no hover, and the capsule drops its
+                    caret below 1020px — so burying them would make three
+                    sections unreachable on the devices most people use.
+                  */}
+                  {link.children?.map((child) => (
+                    <Pressable
+                      key={child.key}
+                      onPress={() => onNavigateChild(child)}
+                      accessibilityRole="link"
+                      accessibilityLabel={`${link.label}: ${child.label}`}
+                      style={({ pressed }) => [
+                        styles.drawerChild,
+                        { borderBottomColor: theme.navBorder },
+                        pressed && { backgroundColor: theme.surfaceMuted },
                       ]}>
-                      {link.label}
-                    </Text>
-                    <Text style={[styles.drawerDescription, { color: theme.textMuted }]}>
-                      {link.description}
-                    </Text>
-                  </View>
-                </Pressable>
+                      <View
+                        style={[styles.drawerChildRule, { backgroundColor: theme.navBorder }]}
+                      />
+                      {child.icon(theme.textSecondary, 15)}
+                      <Text style={[styles.drawerChildLabel, { color: theme.textSecondary }]}>
+                        {child.label}
+                      </Text>
+                    </Pressable>
+                  ))}
+                </View>
               );
             })}
 
@@ -685,6 +1065,20 @@ const styles = StyleSheet.create({
     // Side margins only — the capsule stretches to fill the rest of the width.
     paddingHorizontal: Spacing.four,
     paddingBottom: Spacing.two,
+    /*
+     * Above the live ticker, which is the *next* sibling inside StickyHeader.
+     *
+     * Without this the two stack in document order and the ticker wins, so an
+     * open dropdown was drawn behind the "No parcels moving right now" bar —
+     * its first item half-hidden. The header's own `zIndex: 50` only settles
+     * the header against the page below it; this settles the two pieces of the
+     * header against each other.
+     *
+     * Kept low deliberately: it competes with `styles.ticker`, not with the
+     * header, so a large number here would only invite the next person to
+     * escalate.
+     */
+    zIndex: 2,
   },
   wrapperTight: {
     paddingHorizontal: Spacing.three,
@@ -732,8 +1126,80 @@ const styles = StyleSheet.create({
   linksHidden: {
     display: 'none',
   },
+  /** Anchor for the submenu, which is positioned against this box. */
+  linkWrapper: {
+    position: 'relative',
+  },
+  linkWrapperOpen: {
+    zIndex: 60,
+  },
+  linkRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 2,
+  },
   link: {
     paddingVertical: Spacing.one,
+  },
+  caret: {
+    paddingVertical: Spacing.one,
+    paddingHorizontal: 1,
+    // Cancels the 5px gap the label reserves for its underline, so the chevron
+    // sits on the text baseline rather than floating above it.
+    marginBottom: 7,
+    ...Platform.select({ web: { cursor: 'pointer' }, default: {} }),
+  },
+  caretOpen: {
+    transform: [{ rotate: '180deg' }],
+  },
+  submenu: {
+    position: 'absolute',
+    // Clear of the label and its underline, with a small gap the pointer can
+    // cross — hence the close delay in `hoverClose`.
+    top: '100%',
+    marginTop: Spacing.two,
+    /*
+     * 296px, measured: "Terms of Service & Privacy Policy" renders 219.5px at
+     * 14px semi-bold, and the row spends 20px on padding, 30px on the icon and
+     * 8px on the gap. At the old 268px that label wrapped to two lines.
+     */
+    minWidth: 296,
+    borderRadius: Radius.lg,
+    borderWidth: StyleSheet.hairlineWidth,
+    paddingVertical: Spacing.one,
+  },
+  submenuStart: {
+    left: -Spacing.two,
+  },
+  submenuEnd: {
+    right: -Spacing.two,
+  },
+  submenuItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.two,
+    paddingVertical: Spacing.two - 2,
+    paddingHorizontal: Spacing.three - 2,
+    ...Platform.select({ web: { cursor: 'pointer' }, default: {} }),
+  },
+  submenuIcon: {
+    width: 30,
+    height: 30,
+    borderRadius: Radius.sm,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  submenuText: {
+    flex: 1,
+    gap: 1,
+  },
+  submenuLabel: {
+    fontSize: 14,
+    ...font(700),
+  },
+  submenuDescription: {
+    fontSize: 11.5,
+    ...font(500),
   },
   linkIconOnly: {
     width: 34,
@@ -866,6 +1332,27 @@ const styles = StyleSheet.create({
     borderRadius: 2,
     // Cancels the row's own gap so the bar sits flush against the edge.
     marginRight: -(Spacing.three - 2) + Spacing.two,
+  },
+  drawerChild: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.two - 2,
+    // Indented under its parent, so the relationship is visible without a
+    // disclosure control.
+    paddingLeft: Spacing.two,
+    paddingVertical: Spacing.two - 1,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+  },
+  drawerChildRule: {
+    width: 2,
+    height: 16,
+    borderRadius: 1,
+    marginRight: Spacing.two,
+  },
+  drawerChildLabel: {
+    ...Typography.meta,
+    ...font(600),
+    flex: 1,
   },
   drawerIcon: {
     width: 38,

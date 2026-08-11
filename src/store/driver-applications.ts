@@ -52,6 +52,17 @@ export type DriverApplication = {
   reviewedBy: string | null;
   reviewedAt: string | null;
   submittedAt: string;
+
+  /**
+   * When the confirmation email was accepted by the provider, and why it wasn't.
+   *
+   * Both null means never attempted — no email provider is configured yet.
+   * Written only by the Edge Function running as the service role; a trigger in
+   * `06_application_email.sql` refuses client writes, so an applicant cannot
+   * mark their own row as delivered.
+   */
+  confirmationEmailSentAt: string | null;
+  confirmationEmailError: string | null;
 };
 
 type Row = Record<string, unknown>;
@@ -92,12 +103,22 @@ export function rowToApplication(row: Row): DriverApplication {
     reviewedBy: nullableStr(row.reviewed_by),
     reviewedAt: nullableStr(row.reviewed_at),
     submittedAt: str(row.submitted_at),
+    confirmationEmailSentAt: nullableStr(row.confirmation_email_sent_at),
+    confirmationEmailError: nullableStr(row.confirmation_email_error),
   };
 }
 
 export type NewApplication = Omit<
   DriverApplication,
-  'id' | 'status' | 'reviewNote' | 'reviewedBy' | 'reviewedAt' | 'submittedAt'
+  | 'id'
+  | 'status'
+  | 'reviewNote'
+  | 'reviewedBy'
+  | 'reviewedAt'
+  | 'submittedAt'
+  // Set by the system after the fact, never by the client submitting the form.
+  | 'confirmationEmailSentAt'
+  | 'confirmationEmailError'
 >;
 
 export async function submitApplication(application: NewApplication): Promise<DriverApplication> {

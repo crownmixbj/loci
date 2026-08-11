@@ -52,7 +52,13 @@
     "web": "expo start --web",
     "lint": "expo lint",
     "build:web": "expo export --platform web",
-    "typecheck": "tsc --noEmit --noUnusedLocals"
+    "typecheck": "tsc --noEmit --noUnusedLocals",
+    "verify:email": "npx esbuild scripts/verify-application-email.ts --bundle --platform=node --format=cjs --outfile=node_modules/.cache/verify-email.cjs --log-level=warning && node node_modules/.cache/verify-email.cjs",
+    "verify:hubs": "npx esbuild scripts/verify-hubs.ts --bundle --platform=node --format=cjs --alias:@=./src --outfile=node_modules/.cache/verify-hubs.cjs --log-level=warning && node node_modules/.cache/verify-hubs.cjs",
+    "verify:drivers": "npx esbuild scripts/verify-driver-hub.ts --bundle --platform=node --format=cjs --alias:@=./src --alias:react-native=./scripts/stubs/react-native.js --alias:@react-native-async-storage/async-storage=./scripts/stubs/async-storage.js --outfile=node_modules/.cache/verify-drivers.cjs --log-level=warning && node node_modules/.cache/verify-drivers.cjs",
+    "verify": "npm run verify:email && npm run verify:hubs && npm run verify:drivers && npm run verify:about && npm run verify:shipments && npm run typecheck",
+    "verify:about": "npx esbuild scripts/verify-about.ts --bundle --platform=node --format=cjs --alias:@=./src --alias:react-native=./scripts/stubs/react-native.js --alias:@react-native-async-storage/async-storage=./scripts/stubs/async-storage.js --outfile=node_modules/.cache/verify-about.cjs --log-level=warning && node node_modules/.cache/verify-about.cjs",
+    "verify:shipments": "npx esbuild scripts/verify-shipments.ts --bundle --platform=node --format=cjs --alias:@=./src --alias:react-native=./scripts/stubs/react-native.js --alias:@react-native-async-storage/async-storage=./scripts/stubs/async-storage.js --alias:react-native-svg=./scripts/stubs/empty.js --alias:expo-linear-gradient=./scripts/stubs/empty.js --alias:react-native-webview=./scripts/stubs/empty.js --alias:expo-router=./scripts/stubs/empty.js --outfile=node_modules/.cache/verify-shipments.cjs --log-level=warning && node node_modules/.cache/verify-shipments.cjs"
   },
   "private": true
 }

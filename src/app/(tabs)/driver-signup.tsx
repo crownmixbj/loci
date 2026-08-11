@@ -1132,18 +1132,34 @@ function DocumentRow({
   );
 }
 
-/** What the applicant should do while the review runs. */
-const NEXT_STEPS: { text: string; icon: (color: string) => React.ReactNode }[] = [
-  { text: 'Check your inbox for a confirmation email.', icon: (c) => <Mail color={c} size={15} /> },
-  {
-    text: 'Stay available for a potential verification call.',
-    icon: (c) => <PhoneCall color={c} size={15} />,
-  },
-  {
-    text: 'Ensure your vehicle is ready for final inspection.',
-    icon: (c) => <ClipboardCheck color={c} size={15} />,
-  },
-];
+/**
+ * What the applicant should do while the review runs.
+ *
+ * The first line names the address rather than saying "check your inbox",
+ * because that is the one thing on this screen the applicant can act on and
+ * verify. It is also the moment a typo in the email field becomes obvious —
+ * before they spend a week waiting for a message that went nowhere.
+ */
+function nextSteps(email: string): { text: string; icon: (color: string) => React.ReactNode }[] {
+  const address = email.trim();
+
+  return [
+    {
+      text: address
+        ? `We've emailed a confirmation to ${address}. It usually arrives within a minute — check spam if it doesn't.`
+        : 'Check your inbox for a confirmation email.',
+      icon: (c) => <Mail color={c} size={15} />,
+    },
+    {
+      text: 'Stay available for a potential verification call.',
+      icon: (c) => <PhoneCall color={c} size={15} />,
+    },
+    {
+      text: 'Ensure your vehicle is ready for final inspection.',
+      icon: (c) => <ClipboardCheck color={c} size={15} />,
+    },
+  ];
+}
 
 function ReviewStatus({
   reference,
@@ -1349,7 +1365,7 @@ function ReviewStatus({
         {/* ---------- Next steps ---------- */}
         <Card style={styles.card}>
           <SectionLabel>What happens next</SectionLabel>
-          {NEXT_STEPS.map((item) => (
+          {nextSteps(form.email).map((item) => (
             <View key={item.text} style={styles.stepRow}>
               <View style={[styles.nextIcon, { backgroundColor: theme.primarySoft }]}>
                 {item.icon(theme.primaryOnSoft)}

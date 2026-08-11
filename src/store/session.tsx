@@ -133,6 +133,14 @@ export type SessionContextValue = {
   registerDriver: (registration: DriverRegistration) => void;
   /** The signed-in user's own application, once loaded. Null if they have none. */
   application: DriverApplication | null;
+  /**
+   * False until the application has actually been looked up.
+   *
+   * `application === null` alone cannot tell "they have none" from "we have not
+   * asked yet", and screens that pick a default view from it need the
+   * difference.
+   */
+  driverStatusLoaded: boolean;
   /** True only once an admin has approved. Gates accepting jobs. */
   isApprovedDriver: boolean;
   /** Whether this account can open the review dashboard. */
@@ -261,6 +269,7 @@ export function SessionProvider({
   const [driver, setDriver] = useState<DriverRegistration | null>(null);
   const [session, setSession] = useState<Session | null>(null);
   const [application, setApplication] = useState<DriverApplication | null>(null);
+  const [driverStatusLoaded, setDriverStatusLoaded] = useState(false);
   const [isAdmin, setIsAdmin] = useState(false);
   const [status, setStatus] = useState<SessionStatus>(
     isSupabaseConfigured ? 'loading' : 'signedOut',
@@ -318,6 +327,7 @@ export function SessionProvider({
     if (!isSupabaseConfigured || !user) {
       setApplication(null);
       setIsAdmin(false);
+      setDriverStatusLoaded(true);
       return;
     }
 
@@ -328,6 +338,15 @@ export function SessionProvider({
 
     setApplication(nextApplication);
     setIsAdmin(nextIsAdmin);
+    /*
+     * Distinguishes "no application" from "not asked yet".
+     *
+     * Both read as `application === null`, and a screen that has to *choose* a
+     * default from it — Be a Driver / Updates picks the form or the timeline —
+     * would otherwise show an existing applicant the blank form for the moment
+     * before the fetch lands.
+     */
+    setDriverStatusLoaded(true);
   }, [user]);
 
   useEffect(() => {
@@ -512,6 +531,7 @@ export function SessionProvider({
       driver,
       registerDriver,
       application,
+      driverStatusLoaded,
       isApprovedDriver: application?.status === 'approved',
       isAdmin,
       refreshDriverStatus,
