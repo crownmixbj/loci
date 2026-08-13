@@ -26,7 +26,7 @@ import { Badge, RoutePill } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { EmptyState, screenPadding, ScreenHeader, SectionLabel } from '@/components/ui/screen';
-import { Radius, Spacing, Typography, font } from '@/constants/theme';
+import {FontSize, Radius, Spacing, Typography, font } from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';
 import {
   formatNaira,
@@ -467,7 +467,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   avatarText: {
-    fontSize: 16,
+    fontSize: FontSize.body,
     ...font(800),
     letterSpacing: 0.5,
   },
@@ -564,7 +564,7 @@ const styles = StyleSheet.create({
     gap: Spacing.half,
   },
   statValue: {
-    fontSize: 20,
+    fontSize: FontSize.subhead,
     ...font(700),
   },
   statLabel: {
@@ -648,7 +648,7 @@ const styles = StyleSheet.create({
     ...Typography.meta,
   },
   payoutValue: {
-    fontSize: 17,
+    fontSize: FontSize.subhead,
     ...font(700),
   },
   cta: {

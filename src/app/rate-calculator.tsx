@@ -26,7 +26,7 @@ import { SegmentedControl } from '@/components/ui/chip';
 import { ToggleRow } from '@/components/ui/dropdown';
 import { Field } from '@/components/ui/field';
 import { SectionLabel } from '@/components/ui/screen';
-import { MaxContentWidth, Radius, Spacing, Typography, font } from '@/constants/theme';
+import {FontSize, MaxContentWidth, Radius, Spacing, Typography, font } from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';
 import {
   DELIVERY_TYPES,
@@ -227,7 +227,7 @@ const styles = StyleSheet.create({
   },
   title: {
     ...Typography.screenTitle,
-    fontSize: 26,
+    fontSize: FontSize.title,
   },
   subtitle: {
     ...Typography.screenSubtitle,
@@ -300,7 +300,7 @@ const styles = StyleSheet.create({
     ...Typography.sectionTitle,
   },
   totalValue: {
-    fontSize: 24,
+    fontSize: FontSize.heading,
     ...font(700),
   },
   disclaimer: {

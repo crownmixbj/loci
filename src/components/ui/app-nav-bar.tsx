@@ -27,7 +27,7 @@ import {
   UserRound,
   X,
 } from 'lucide-react-native';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Modal,
   Platform,
@@ -41,12 +41,14 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { HUB_SECTION_LABELS } from '@/constants/hubs';
-import { Elevation, Radius, Spacing, Typography, font } from '@/constants/theme';
+import { FontSize, Elevation, Radius, Spacing, Typography, font } from '@/constants/theme';
 import { AppStoreModal, detectStorePlatform, openStore } from '@/components/ui/app-store-modal';
 import { useTheme } from '@/hooks/use-theme';
 import { showDialog } from '@/components/ui/dialog';
 import { showToast } from '@/components/ui/toast';
 import { SESSION_ROLES, useSession } from '@/store/session';
+import { useExperience } from '@/hooks/use-experience';
+import { routeAllowed } from '@/lib/experience';
 
 /** Deep navy for nav links at rest — 11.2:1 on the white capsule. */
 const NavLinkColor = '#0B3C5D';
@@ -436,11 +438,35 @@ export function AppNavBar() {
   const [storeModalOpen, setStoreModalOpen] = useState(false);
   /** Key of the link whose submenu is showing, or null. Only ever one at a time. */
   const [openSubmenu, setOpenSubmenu] = useState<string | null>(null);
-  const { role, setRole, user, isAuthenticated, isAdmin, signOut } = useSession();
+  const { role, setRole, user, isAuthenticated, isAdmin, isApprovedDriver, signOut } = useSession();
+  const experience = useExperience();
   // Labels need room; below that the links drop to icons, and below *that* they
   // leave the capsule entirely — the drawer already lists every one of them, so
   // nothing becomes unreachable.
-  const navLinks = NAV_LINKS.filter((link) => link.key !== 'admin' || isAdmin);
+  /**
+   * The links this interface has, with their children filtered the same way.
+   *
+   * Both the nav and the route guard read `routeAllowed`, so a link can never
+   * offer a destination the guard would immediately bounce someone off — the
+   * two would otherwise drift, and the symptom is a menu item that flashes a
+   * screen and returns.
+   *
+   * A group whose children are all filtered out is dropped entirely rather than
+   * left as a heading that opens an empty menu.
+   */
+  const navLinks = useMemo(() => {
+    if (!experience) return [];
+
+    return NAV_LINKS.filter((link) => link.key !== 'admin' || isAdmin)
+      .map((link) => ({
+        ...link,
+        children: link.children?.filter((child) => routeAllowed(child.href, experience)),
+      }))
+      .filter((link) => {
+        if (link.children) return link.children.length > 0;
+        return routeAllowed(link.href, experience);
+      });
+  }, [experience, isAdmin]);
 
   /*
    * A submenu left open across a navigation would hang over the new page with
@@ -603,10 +629,19 @@ export function AppNavBar() {
 
           <View style={[styles.actions, tight && styles.actionsTight]}>
             {/*
-              Stands in for real auth: flips which sections the home screen
-              shows. Remove once sign-in exists.
+              Shown only to someone who is actually both.
+
+              For everyone else the toggle offered a driver view they had no
+              application for — a switch whose only effect was a screen full of
+              empty states. On web it is hidden too: the dashboard shows
+              everything the account can do without choosing a side.
             */}
-            <View style={[styles.segmented, { backgroundColor: theme.surfaceMuted }]}>
+            <View
+              style={[
+                styles.segmented,
+                { backgroundColor: theme.surfaceMuted },
+                !(isApprovedDriver && experience !== 'web') && styles.hidden,
+              ]}>
               {SESSION_ROLES.map((option) => {
                 const active = role === option.value;
 
@@ -1246,9 +1281,7 @@ const styles = StyleSheet.create({
     paddingVertical: Spacing.half,
   },
   logoText: {
-    fontSize: 20,
-    ...font(800),
-    letterSpacing: 1.6,
+    ...Typography.wordmark,
   },
   links: {
     flexDirection: 'row',
@@ -1262,6 +1295,9 @@ const styles = StyleSheet.create({
   },
   /** Phone widths: the drawer carries navigation, so the row takes no space. */
   linksHidden: {
+    display: 'none',
+  },
+  hidden: {
     display: 'none',
   },
   /** Anchor for the submenu, which is positioned against this box. */
@@ -1326,11 +1362,11 @@ const styles = StyleSheet.create({
     gap: 1,
   },
   submenuLabel: {
-    fontSize: 14,
+    fontSize: FontSize.small,
     ...font(700),
   },
   submenuDescription: {
-    fontSize: 11.5,
+    fontSize: FontSize.micro,
     ...font(500),
   },
   linkIconOnly: {
@@ -1350,7 +1386,7 @@ const styles = StyleSheet.create({
     gap: 5,
   },
   linkText: {
-    fontSize: 16,
+    fontSize: FontSize.body,
     // Semi-bold on every link, active or not — only the colour changes.
     ...font(600),
     textAlign: 'center',
@@ -1409,11 +1445,11 @@ const styles = StyleSheet.create({
     ...Platform.select({ web: { transitionDuration: '150ms', cursor: 'pointer' }, default: {} }),
   },
   segmentText: {
-    fontSize: 12,
+    fontSize: FontSize.caption,
     ...font(700),
   },
   avatarInitials: {
-    fontSize: 12,
+    fontSize: FontSize.caption,
     ...font(700),
     letterSpacing: 0.3,
   },
@@ -1518,10 +1554,10 @@ const styles = StyleSheet.create({
     borderRadius: Radius.pill,
   },
   flag: {
-    fontSize: 13,
+    fontSize: FontSize.caption,
   },
   flagText: {
-    fontSize: 11,
+    fontSize: FontSize.micro,
     ...font(700),
   },
 });

@@ -50,7 +50,7 @@ import { ServiceCategoryCard } from '@/components/ui/service-category-card';
 import { serviceArtwork } from '@/constants/service-artwork';
 import { servicePrefillParams } from '@/constants/services';
 import { HERO_BACKGROUND } from '@/constants/hero-background';
-import {
+import {FontSize,
   HeroSurface,
   Radius,
   Spacing,
@@ -951,7 +951,7 @@ const styles = StyleSheet.create({
     paddingVertical: Spacing.half + 1,
   },
   statusBadgeText: {
-    fontSize: 11,
+    fontSize: FontSize.micro,
     ...font(700),
   },
   cardMetaRow: {
@@ -970,7 +970,7 @@ const styles = StyleSheet.create({
     borderRadius: Radius.pill,
   },
   routePillText: {
-    fontSize: 12,
+    fontSize: FontSize.caption,
     ...font(600),
   },
   /** 6px track — `1.5` in the reference. */

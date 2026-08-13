@@ -14,7 +14,7 @@ import {
 
 import { PROCESS_STEPS, type ProcessStep } from '@/constants/how-it-works-steps';
 import { STEP_ILLUSTRATIONS, STEP_ILLUSTRATION_HEIGHT } from '@/constants/step-illustrations';
-import { Radius, Spacing, Typography, font } from '@/constants/theme';
+import {FontSize, Radius, Spacing, Typography, font } from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';
 
 /**
@@ -256,7 +256,7 @@ const styles = StyleSheet.create({
    * of card height for no extra meaning.
    */
   stepNumber: {
-    fontSize: 13,
+    fontSize: FontSize.caption,
     ...font(800),
     letterSpacing: 1,
     color: Glass.stepNumber,

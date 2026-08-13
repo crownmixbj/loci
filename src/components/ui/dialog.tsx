@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Modal, Pressable, StyleSheet, Text, View } from 'react-native';
 
-import { Elevation, Radius, Spacing, Typography, font } from '@/constants/theme';
+import {FontSize, Elevation, Radius, Spacing, Typography, font } from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';
 
 /**
@@ -195,7 +195,7 @@ const styles = StyleSheet.create({
   },
   title: {
     ...Typography.sectionTitle,
-    fontSize: 19,
+    fontSize: FontSize.subhead,
   },
   message: {
     ...Typography.body,

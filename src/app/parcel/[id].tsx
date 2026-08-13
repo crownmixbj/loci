@@ -25,7 +25,7 @@ import { Card } from '@/components/ui/card';
 import { EmptyState } from '@/components/ui/screen';
 import { MapView, type MapMarker } from '@/components/ui/map-view';
 import { StickyHeaderScreen } from '@/components/ui/sticky-header';
-import { MaxContentWidth, Radius, Spacing, Typography, font } from '@/constants/theme';
+import {FontSize, MaxContentWidth, Radius, Spacing, Typography, font } from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';
 import {
   BOOKING_STAGES,
@@ -330,7 +330,7 @@ const styles = StyleSheet.create({
   },
   title: {
     ...Typography.screenTitle,
-    fontSize: 24,
+    fontSize: FontSize.heading,
   },
   trackingId: {
     ...Typography.meta,
@@ -414,7 +414,7 @@ const styles = StyleSheet.create({
     ...Typography.sectionTitle,
   },
   totalValue: {
-    fontSize: 22,
+    fontSize: FontSize.heading,
     ...font(700),
   },
 });

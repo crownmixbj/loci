@@ -11,7 +11,7 @@ import { MapView, type MapMarker } from '@/components/ui/map-view';
 import { SectionLabel } from '@/components/ui/screen';
 import { openLabel, openState } from '@/constants/hub-hours';
 import { hubPosition, type Hub } from '@/constants/hubs';
-import { Radius, Spacing, Typography, font } from '@/constants/theme';
+import {FontSize, Radius, Spacing, Typography, font } from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';
 import { fetchCityVolumes, type CityVolume } from '@/store/admin';
 import { HubEditor } from '@/components/ui/hub-editor';
@@ -325,7 +325,7 @@ const styles = StyleSheet.create({
     gap: Spacing.two,
   },
   total: {
-    fontSize: 18,
+    fontSize: FontSize.subhead,
     ...font(800),
   },
   mapBlock: {

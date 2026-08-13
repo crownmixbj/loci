@@ -6,7 +6,7 @@ import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { EmptyState, screenPadding, ScreenHeader } from '@/components/ui/screen';
 import { SignedOutState } from '@/components/ui/signed-out-state';
-import { MaxContentWidth, Radius, Spacing, Typography, font } from '@/constants/theme';
+import {FontSize, MaxContentWidth, Radius, Spacing, Typography, font } from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';
 import { useSession } from '@/store/session';
 
@@ -193,7 +193,7 @@ const styles = StyleSheet.create({
     gap: Spacing.half,
   },
   metricValue: {
-    fontSize: 26,
+    fontSize: FontSize.title,
     ...font(800),
   },
   metricLabel: {

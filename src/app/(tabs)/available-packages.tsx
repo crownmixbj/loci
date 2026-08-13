@@ -27,7 +27,7 @@ import { Card } from '@/components/ui/card';
 import { Dropdown } from '@/components/ui/dropdown';
 import { EmptyState, screenPadding, ScreenHeader, SectionLabel } from '@/components/ui/screen';
 import { formatDistance, routeDistanceKm } from '@/constants/hub-coordinates';
-import { Radius, Spacing, Typography, font } from '@/constants/theme';
+import {FontSize, Radius, Spacing, Typography, font } from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';
 import { useNotifications } from '@/store/notifications';
 import { useSession } from '@/store/session';
@@ -761,11 +761,11 @@ const styles = StyleSheet.create({
     flexShrink: 0,
   },
   payoutValue: {
-    fontSize: 16,
+    fontSize: FontSize.body,
     ...font(700),
   },
   payoutLabel: {
-    fontSize: 9,
+    fontSize: FontSize.micro,
     ...font(600),
     letterSpacing: 0.5,
     textTransform: 'uppercase',

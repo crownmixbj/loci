@@ -33,7 +33,7 @@ import { showDialog } from '@/components/ui/dialog';
 import { EmptyState, screenPadding, ScreenHeader, SectionLabel } from '@/components/ui/screen';
 import { SignedOutState } from '@/components/ui/signed-out-state';
 import { showToast } from '@/components/ui/toast';
-import { MaxContentWidth, Radius, Spacing, Typography, font } from '@/constants/theme';
+import {FontSize, MaxContentWidth, Radius, Spacing, Typography, font } from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';
 import {
   fetchAllApplications,
@@ -598,7 +598,7 @@ const styles = StyleSheet.create({
     borderRadius: Radius.md,
     gap: 2,
   },
-  statValue: { fontSize: 24, ...font(800) },
+  statValue: { fontSize: FontSize.heading, ...font(800) },
   statLabel: { ...Typography.meta },
   banner: { padding: Spacing.three - 4, borderRadius: Radius.md },
   bannerText: { ...Typography.meta, lineHeight: 19 },

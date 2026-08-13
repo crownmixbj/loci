@@ -25,7 +25,7 @@ import {
   servicePrefillParams,
   type ServiceId,
 } from '@/constants/services';
-import { Radius, Spacing, Typography, font } from '@/constants/theme';
+import {FontSize, Radius, Spacing, Typography, font } from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';
 import { CITIES, formatNaira, PRICING } from '@/store/bookings';
 
@@ -228,7 +228,7 @@ const styles = StyleSheet.create({
     paddingVertical: Spacing.four,
   },
   heroTitle: {
-    fontSize: 32,
+    fontSize: FontSize.display,
     lineHeight: 39,
     ...font(800),
     letterSpacing: -0.8,
@@ -272,7 +272,7 @@ const styles = StyleSheet.create({
   },
   featureTitle: {
     ...Typography.cardTitle,
-    fontSize: 18,
+    fontSize: FontSize.subhead,
   },
   featureTagline: {
     ...Typography.meta,

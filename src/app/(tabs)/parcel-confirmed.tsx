@@ -31,7 +31,7 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { EmptyState, screenPadding, SectionLabel } from '@/components/ui/screen';
-import { MaxContentWidth, PageCanvas, Radius, Spacing, Typography, font } from '@/constants/theme';
+import {FontSize, MaxContentWidth, PageCanvas, Radius, Spacing, Typography, font } from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';
 import {
   BOOKING_STAGES,
@@ -466,7 +466,7 @@ const styles = StyleSheet.create({
     opacity: 0.8,
   },
   trackingValue: {
-    fontSize: 16,
+    fontSize: FontSize.body,
     ...font(800),
     letterSpacing: 0.4,
   },
@@ -617,7 +617,7 @@ const styles = StyleSheet.create({
     ...font(700),
   },
   totalValue: {
-    fontSize: 20,
+    fontSize: FontSize.subhead,
     ...font(800),
   },
   disclaimer: {

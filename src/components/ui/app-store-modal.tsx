@@ -1,7 +1,7 @@
 import { Apple, Check, Smartphone, X } from 'lucide-react-native';
 import { Linking, Modal, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 
-import { Elevation, Radius, Spacing, Typography, font } from '@/constants/theme';
+import {FontSize, Elevation, Radius, Spacing, Typography, font } from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';
 
 export const STORE_LINKS = {
@@ -184,7 +184,7 @@ const styles = StyleSheet.create({
   },
   title: {
     ...Typography.sectionTitle,
-    fontSize: 19,
+    fontSize: FontSize.subhead,
   },
   subtitle: {
     ...Typography.meta,
@@ -232,7 +232,7 @@ const styles = StyleSheet.create({
     gap: Spacing.one,
   },
   detectedText: {
-    fontSize: 11,
+    fontSize: FontSize.micro,
     ...font(700),
   },
 });

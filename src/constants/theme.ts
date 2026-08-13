@@ -289,22 +289,126 @@ export const Radius = {
  * references — 4xl/5xl hero, 2xl section headers, base card titles, sm for
  * supporting text, buttons and badges — so nothing sets its own font size.
  */
+/**
+ * The type scale.
+ *
+ * One ramp, seven steps, and every token below sits on one of them. Before
+ * this, seven of the twelve tokens were all 14px — `body`, `caption`, `meta`,
+ * `label`, `badge`, `button` and `screenSubtitle` rendered identically — so a
+ * footnote was the same size as the sentence it footnoted. The names promised
+ * an order the values did not have.
+ *
+ * The steps are the widely used mobile ramp rather than a bespoke curve:
+ *
+ *     display   32   the largest thing on a screen that is not the hero
+ *     title     28   screen titles
+ *     heading   22   section headers within a screen
+ *     subhead   17   card titles, sub-headers
+ *     body      16   default reading size
+ *     small     14   secondary text: metadata, labels, button faces
+ *     caption   12   footnotes, hints, timestamps
+ *     micro     11   the floor — overlines and dense badges only
+ *
+ * 16 for body is deliberate. It is the size below which mobile body text stops
+ * being comfortable, and the browser default that people's zoom settings are
+ * calibrated against. Nothing goes below `micro`: 9px and 10px text existed in
+ * this app and is unreadable on a phone in daylight.
+ */
+export const FontSize = {
+  display: 32,
+  title: 28,
+  heading: 22,
+  subhead: 17,
+  body: 16,
+  small: 14,
+  caption: 12,
+  micro: 11,
+} as const;
+
+export type FontSizeStep = keyof typeof FontSize;
+
+/**
+ * Line height from size, rather than typed out per token.
+ *
+ * Large text needs proportionally *less* leading than small text — a 32px
+ * heading at 1.5 looks like two separate lines, and 12px at 1.2 is cramped. The
+ * ratio therefore tightens as the size grows, which is what typesetting has
+ * always done and what a flat multiplier gets wrong at both ends.
+ */
+export function lineHeightFor(size: number): number {
+  const ratio = size >= 28 ? 1.2 : size >= 20 ? 1.3 : size >= 16 ? 1.5 : 1.45;
+  return Math.round(size * ratio);
+}
+
 export const Typography = {
   /** Hero. Pair with `heroTitleSize(width)` for the 4xl → 5xl step-up. */
   heroTitle: { ...font(800), letterSpacing: -1, lineHeight: 44 },
+
+  /** The biggest thing on a screen short of the hero. */
+  display: {
+    fontSize: FontSize.display,
+    ...font(800),
+    letterSpacing: -0.6,
+    lineHeight: lineHeightFor(FontSize.display),
+  },
+  screenTitle: {
+    fontSize: FontSize.title,
+    ...font(700),
+    letterSpacing: -0.5,
+    lineHeight: lineHeightFor(FontSize.title),
+  },
   /** Centred section headers: How LOCI Works, My Sent Packages, Available Jobs. */
-  sectionHeading: { fontSize: 24, ...font(700), letterSpacing: -0.5 },
-  screenTitle: { fontSize: 30, ...font(700), letterSpacing: -0.5 },
-  screenSubtitle: { fontSize: 14, ...font(400), lineHeight: 21 },
+  sectionHeading: {
+    fontSize: FontSize.heading,
+    ...font(700),
+    letterSpacing: -0.3,
+    lineHeight: lineHeightFor(FontSize.heading),
+  },
   /** Sub-headers inside a section — smaller than `sectionHeading` by design. */
-  sectionTitle: { fontSize: 16, ...font(600) },
-  cardTitle: { fontSize: 16, ...font(600), lineHeight: 22 },
-  body: { fontSize: 14, ...font(400), lineHeight: 21 },
-  label: { fontSize: 14, ...font(600), letterSpacing: 0.1 },
-  meta: { fontSize: 14, ...font(400), lineHeight: 20 },
-  caption: { fontSize: 14, ...font(400), lineHeight: 20 },
-  badge: { fontSize: 14, ...font(600), letterSpacing: 0.2 },
-  button: { fontSize: 14, ...font(600) },
+  sectionTitle: {
+    fontSize: FontSize.subhead,
+    ...font(600),
+    lineHeight: lineHeightFor(FontSize.subhead),
+  },
+  cardTitle: {
+    fontSize: FontSize.subhead,
+    ...font(600),
+    lineHeight: lineHeightFor(FontSize.subhead),
+  },
+
+  body: { fontSize: FontSize.body, ...font(400), lineHeight: lineHeightFor(FontSize.body) },
+  /**
+   * The subtitle under a screen title. One step below body, because it is
+   * supporting text — at the same size it competed with the content beneath it.
+   */
+  screenSubtitle: {
+    fontSize: FontSize.small,
+    ...font(400),
+    lineHeight: lineHeightFor(FontSize.small),
+  },
+
+  /** Secondary text: values, names, metadata. */
+  meta: { fontSize: FontSize.small, ...font(400), lineHeight: lineHeightFor(FontSize.small) },
+  label: { fontSize: FontSize.small, ...font(600), letterSpacing: 0.1 },
+  button: { fontSize: FontSize.small, ...font(600) },
+
+  /** Footnotes, hints, timestamps. Genuinely smaller than `meta` now. */
+  caption: { fontSize: FontSize.caption, ...font(400), lineHeight: lineHeightFor(FontSize.caption) },
+  badge: { fontSize: FontSize.caption, ...font(600), letterSpacing: 0.2 },
+
+  /** The floor. Overlines and dense chips only — never a sentence. */
+  micro: { fontSize: FontSize.micro, ...font(600), letterSpacing: 0.3 },
+
+  /**
+   * The LOCI wordmark. Deliberately off the ramp.
+   *
+   * A logotype is a drawn mark that happens to be set in type — it is sized to
+   * look right next to the nav controls, not to sit in a reading hierarchy.
+   * Snapping it to `subhead` shrank it from 20 to 17 and made the brand smaller
+   * than a card title, which is the sort of thing a scale gets wrong when
+   * applied without looking.
+   */
+  wordmark: { fontSize: 20, ...font(800), letterSpacing: 1.6 },
 } as const;
 
 /** text-4xl on phones, text-5xl from the md breakpoint up. */

@@ -3,7 +3,7 @@ import { MapPin, Truck, UserRound } from 'lucide-react-native';
 import { Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { Marquee, PulsingDot } from '@/components/ui/marquee';
-import { Radius, Spacing, Typography, font } from '@/constants/theme';
+import {FontSize, Radius, Spacing, Typography, font } from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';
 import type { ActiveMovement } from '@/store/bookings';
 import type { SessionRole } from '@/store/session';
@@ -168,7 +168,7 @@ const styles = StyleSheet.create({
     flexShrink: 0,
   },
   liveText: {
-    fontSize: 10,
+    fontSize: FontSize.micro,
     ...font(800),
     letterSpacing: 0.6,
   },

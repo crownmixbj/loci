@@ -42,7 +42,7 @@ import { LocationPicker } from '@/components/ui/location-picker';
 import { SelectableUpgradeCard } from '@/components/ui/selectable-upgrade-card';
 import { ValidatedPhoneInput } from '@/components/ValidatedPhoneInput';
 import { screenPadding, ScreenHeader, SectionLabel } from '@/components/ui/screen';
-import { MaxContentWidth, Radius, Spacing, Typography, font } from '@/constants/theme';
+import {FontSize, MaxContentWidth, Radius, Spacing, Typography, font } from '@/constants/theme';
 import { findHub, hubLabel, hubsForCity, type Hub } from '@/constants/hubs';
 import { useHubs } from '@/store/hubs';
 import { HUB_COORDINATES } from '@/constants/hub-coordinates';
@@ -1417,7 +1417,7 @@ const styles = StyleSheet.create({
     ...Typography.sectionTitle,
   },
   totalValue: {
-    fontSize: 24,
+    fontSize: FontSize.heading,
     ...font(700),
   },
   disclaimer: {

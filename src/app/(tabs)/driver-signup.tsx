@@ -49,7 +49,7 @@ import { ValidatedEmailInput } from '@/components/ValidatedEmailInput';
 import { ValidatedPhoneInput } from '@/components/ValidatedPhoneInput';
 import { isValidNigerianPhone, nigerianPhoneError } from '@/utils/validation';
 import { SectionLabel } from '@/components/ui/screen';
-import { MaxContentWidth, PageCanvas, Radius, Spacing, Typography, font } from '@/constants/theme';
+import {FontSize, MaxContentWidth, PageCanvas, Radius, Spacing, Typography, font } from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';
 import {
   isValidEmail,
@@ -1481,7 +1481,7 @@ const styles = StyleSheet.create({
   },
   title: {
     ...Typography.screenTitle,
-    fontSize: 26,
+    fontSize: FontSize.title,
   },
   subtitle: {
     ...Typography.screenSubtitle,
@@ -1578,7 +1578,7 @@ const styles = StyleSheet.create({
     borderRadius: Radius.pill,
   },
   refPillText: {
-    fontSize: 15,
+    fontSize: FontSize.small,
     ...font(700),
     letterSpacing: 0.4,
   },
@@ -1680,7 +1680,7 @@ const styles = StyleSheet.create({
   },
   statusTitle: {
     ...Typography.screenTitle,
-    fontSize: 26,
+    fontSize: FontSize.title,
     textAlign: 'center',
   },
   statusBody: {
@@ -1697,7 +1697,7 @@ const styles = StyleSheet.create({
     ...Typography.caption,
   },
   refValue: {
-    fontSize: 18,
+    fontSize: FontSize.subhead,
     ...font(800),
   },
   divider: {

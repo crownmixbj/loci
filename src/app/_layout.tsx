@@ -18,6 +18,7 @@ import { ToastHost } from '@/components/ui/toast';
 import { Colors } from '@/constants/theme';
 import { BookingsProvider } from '@/store/bookings';
 import { HubsProvider } from '@/store/hubs';
+import { ExperienceRouter } from '@/components/ui/experience-router';
 import { NotificationsProvider } from '@/store/notifications';
 import { SessionProvider } from '@/store/session';
 
@@ -82,6 +83,13 @@ export default function RootLayout() {
                   options={{ presentation: 'modal', animation: 'slide_from_bottom' }}
                 />
               </Stack>
+
+              {/*
+                Inside the providers, outside the Stack: it needs the session
+                and the router, and it must survive every navigation it causes.
+              */}
+              <ExperienceRouter />
+
               {/* Outside the Stack so these survive navigation. */}
               <DialogHost />
               <ToastHost />
