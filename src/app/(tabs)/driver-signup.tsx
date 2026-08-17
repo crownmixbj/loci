@@ -42,6 +42,12 @@ import {
 
 import { errorMessage } from '@/lib/errors';
 import { BottomSheet } from '@/components/ui/bottom-sheet';
+import {
+  ConfirmCheckbox,
+  WizardNav,
+  WizardProgress,
+  type WizardStep,
+} from '@/components/ui/form-wizard';
 import { ExpiryField } from '@/components/ui/expiry-field';
 import { parseExpiry } from '@/lib/expiry';
 import { resolveSenderPhoto, SenderPhotoSheet } from '@/components/ui/sender-photo-sheet';
@@ -235,6 +241,83 @@ const NO_DOCUMENTS = Object.fromEntries(DOCUMENTS.map((doc) => [doc.key, null]))
 type ExpiryErrorKey = `${DocumentKey}Expiry`;
 
 type FieldErrors = Partial<Record<keyof SignupForm | DocumentKey | ExpiryErrorKey, string>>;
+
+/**
+ * The application, in three sittings.
+ *
+ * ⚠ The grouping is by *who is being asked about*, not by which card the field
+ *   used to live in.
+ *
+ *   One page held every field, and the length of it was the problem: thirty
+ *   inputs is a wall, and an applicant who gets halfway has no idea how much is
+ *   left. Splitting it also lets the guarantor and next-of-kin questions sit
+ *   together — they are the two people who are not the applicant, and asking
+ *   for them in one place makes the reason obvious.
+ *
+ * ⚠ Every key here must appear in `SignupForm` or `DOCUMENTS`, and every one of
+ *   those must appear here exactly once. A field on no step cannot be filled in
+ *   and cannot be corrected; a field on two steps would be validated twice and
+ *   shown twice. `verify-drivers` asserts the partition rather than trusting it.
+ */
+const STEPS: WizardStep[] = [
+  { key: 'you', label: 'You & vehicle' },
+  { key: 'people', label: 'Guarantor & kin' },
+  { key: 'money', label: 'Payout & documents' },
+];
+
+/** Which form fields each step is responsible for validating. */
+const STEP_FIELDS: (keyof SignupForm)[][] = [
+  [
+    'fullName',
+    'phone',
+    'email',
+    'nin',
+    'address',
+    'state',
+    'vehicleType',
+    'plateNumber',
+    'licenseId',
+  ],
+  [
+    'guarantorName',
+    'guarantorPhone',
+    'guarantorRelationship',
+    'guarantorAddress',
+    'guarantorNin',
+    'kinName',
+    'kinPhone',
+    'kinRelationship',
+  ],
+  ['bankName', 'accountNumber', 'accountName'],
+];
+
+/**
+ * Whether a step is complete, and what is wrong if it is not.
+ *
+ * Runs the whole `validate` and keeps only this step's keys, so the per-step
+ * check and the submit check can never disagree about what a valid NIN is. The
+ * alternative — a second, smaller validator per step — is how a form ends up
+ * letting somebody past a field that submit then refuses.
+ *
+ * Documents belong to the last step, so their errors (and their expiry errors)
+ * are folded in there rather than listed above.
+ */
+function errorsForStep(step: number, all: FieldErrors): FieldErrors {
+  const keys = new Set<string>(STEP_FIELDS[step] ?? []);
+
+  if (step === STEPS.length - 1) {
+    for (const doc of DOCUMENTS) {
+      keys.add(doc.key);
+      keys.add(`${doc.key}Expiry`);
+    }
+  }
+
+  const mine: FieldErrors = {};
+  for (const [key, message] of Object.entries(all)) {
+    if (keys.has(key)) mine[key as keyof FieldErrors] = message;
+  }
+  return mine;
+}
 
 const INITIAL_FORM: SignupForm = {
   fullName: '',
@@ -455,6 +538,17 @@ export default function DriverSignupScreen() {
   const [expiries, setExpiries] = useState<Record<string, string>>({});
 
   /*
+   * Which sitting they are on, and whether they have confirmed.
+   *
+   * Not persisted with the draft. The answers survive a trip to sign-in — see
+   * `useFormDraft` below — but the *position* deliberately does not: coming
+   * back to a form on page three with no memory of pages one and two is
+   * disorienting, and re-reading two pages of your own answers is cheap.
+   */
+  const [step, setStep] = useState(0);
+  const [confirmed, setConfirmed] = useState(false);
+
+  /*
    * The answers outlive this component.
    *
    * Asking for an account at submit means the app navigates away mid-form, and
@@ -620,10 +714,64 @@ export default function DriverSignupScreen() {
     });
   };
 
+  /**
+   * Forward, if this step is complete.
+   *
+   * ⚠ Only this step's errors are written.
+   *
+   *   Running `validate` and calling `setErrors(all)` would mark the guarantor
+   *   fields red while somebody is still on page one — fields they have not
+   *   seen, on a page they cannot currently reach. Scoping the write means the
+   *   only messages on screen are about what is on screen.
+   */
+  const goNext = () => {
+    const all = validate(form, documents, expiries);
+    const mine = errorsForStep(step, all);
+
+    if (Object.keys(mine).length > 0) {
+      setErrors((previous) => ({ ...previous, ...mine }));
+      return;
+    }
+
+    /*
+     * Clear this step's messages on the way out. A field corrected after it
+     * errored would otherwise keep its red text on the way back, because
+     * nothing else re-runs validation for a step you have left.
+     */
+    setErrors((previous) => {
+      const next = { ...previous };
+      for (const key of Object.keys(errorsForStep(step, previous))) {
+        delete next[key as keyof FieldErrors];
+      }
+      return next;
+    });
+
+    setStep((current) => Math.min(current + 1, STEPS.length - 1));
+  };
+
+  const goBack = () => setStep((current) => Math.max(current - 1, 0));
+
   const handleSubmit = () => {
     const nextErrors = validate(form, documents, expiries);
     setErrors(nextErrors);
-    if (Object.keys(nextErrors).length > 0) return;
+
+    if (Object.keys(nextErrors).length > 0) {
+      /*
+       * ⚠ Sent back to the *first* step that has a problem, not left here.
+       *
+       *   Every earlier step was validated on the way past, so reaching submit
+       *   with an error means something changed after — a field cleared on the
+       *   way back, a draft restored from an older version of this form. Whatever
+       *   the cause, the message is on a page the applicant is not looking at,
+       *   and a Submit button that does nothing with no visible reason is the
+       *   worst possible end to a thirty-field form.
+       */
+      const firstBad = STEPS.findIndex(
+        (_, index) => Object.keys(errorsForStep(index, nextErrors)).length > 0,
+      );
+      if (firstBad >= 0) setStep(firstBad);
+      return;
+    }
 
     /*
      * Validate first, then ask for an account — the same order as the booking
@@ -920,25 +1068,30 @@ export default function DriverSignupScreen() {
             </View>
           )}
 
-          {/* Personal details */}
-          <Card style={styles.card}>
-            <SectionHeading
-              icon={<UserRound color={theme.primary} size={18} />}
-              title="Your details"
-            />
+          {/* ------------------------------------------------- the wizard ---- */}
+          <WizardProgress steps={STEPS} current={step} onJump={setStep} />
 
-            <Field
-              label="Full name"
-              icon={(color, size) => <UserRound color={color} size={size} />}
-              placeholder="Chidi Okafor"
-              value={form.fullName}
-              onChangeText={(text) => setField('fullName', text)}
-              onBlur={() => validateField('fullName')}
-              error={errors.fullName}
-              autoCapitalize="words"
-            />
+          {step === 0 && (
+            <>
+              {/* Personal details */}
+              <Card style={styles.card}>
+                <SectionHeading
+                  icon={<UserRound color={theme.primary} size={18} />}
+                  title="Your details"
+                />
 
-            {/*
+                <Field
+                  label="Full name"
+                  icon={(color, size) => <UserRound color={color} size={size} />}
+                  placeholder="Chidi Okafor"
+                  value={form.fullName}
+                  onChangeText={(text) => setField('fullName', text)}
+                  onBlur={() => validateField('fullName')}
+                  error={errors.fullName}
+                  autoCapitalize="words"
+                />
+
+                {/*
               Locked to the account, not merely prefilled.
 
               A prefilled-but-editable field would let someone change it and be
@@ -950,320 +1103,366 @@ export default function DriverSignupScreen() {
               `16_driver_identity.sql` is the half that actually holds, because
               a disabled input still sends its value.
             */}
-            <ValidatedPhoneInput
-              label="Phone number"
-              value={form.phone}
-              editable={!phoneLocked}
-              onChangeText={(text) => {
-                if (phoneLocked) {
-                  setPhoneLockOpen(true);
-                  return;
-                }
-                setField('phone', text);
-              }}
-              onBlur={() => validateField('phone')}
-              showError={Boolean(errors.phone)}
-              hint={
-                phoneLocked
-                  ? 'From your LOCI account. Tap to see why this cannot be changed here.'
-                  : undefined
-              }
-            />
+                <ValidatedPhoneInput
+                  label="Phone number"
+                  value={form.phone}
+                  editable={!phoneLocked}
+                  onChangeText={(text) => {
+                    if (phoneLocked) {
+                      setPhoneLockOpen(true);
+                      return;
+                    }
+                    setField('phone', text);
+                  }}
+                  onBlur={() => validateField('phone')}
+                  showError={Boolean(errors.phone)}
+                  hint={
+                    phoneLocked
+                      ? 'From your LOCI account. Tap to see why this cannot be changed here.'
+                      : undefined
+                  }
+                />
 
-            <ValidatedEmailInput
-              label="Email address"
-              placeholder="chidi@example.com"
-              value={form.email}
-              onChangeText={(text) => setField('email', text)}
-              onBlur={() => validateField('email')}
-              showError={Boolean(errors.email)}
-            />
+                <ValidatedEmailInput
+                  label="Email address"
+                  placeholder="chidi@example.com"
+                  value={form.email}
+                  onChangeText={(text) => setField('email', text)}
+                  onBlur={() => validateField('email')}
+                  showError={Boolean(errors.email)}
+                />
 
-            {/* Required, alongside the Government ID upload. */}
-            <Field
-              label="National Identification Number (NIN)"
-              icon={(color, size) => <IdCard color={color} size={size} />}
-              placeholder="12345678901"
-              value={form.nin}
-              onChangeText={(text) => setField('nin', text.replace(/\D/g, '').slice(0, NIN_LENGTH))}
-              onBlur={() => validateField('nin')}
-              error={errors.nin}
-              hint={`Required — ${NIN_LENGTH} digits`}
-              keyboardType="number-pad"
-              maxLength={NIN_LENGTH}
-            />
+                {/* Required, alongside the Government ID upload. */}
+                <Field
+                  label="National Identification Number (NIN)"
+                  icon={(color, size) => <IdCard color={color} size={size} />}
+                  placeholder="12345678901"
+                  value={form.nin}
+                  onChangeText={(text) =>
+                    setField('nin', text.replace(/\D/g, '').slice(0, NIN_LENGTH))
+                  }
+                  onBlur={() => validateField('nin')}
+                  error={errors.nin}
+                  hint={`Required — ${NIN_LENGTH} digits`}
+                  keyboardType="number-pad"
+                  maxLength={NIN_LENGTH}
+                />
 
-            <Field
-              label="Residential or office address"
-              icon={(color, size) => <MapPin color={color} size={size} />}
-              placeholder="14 Awolowo Road, Ikoyi, Lagos"
-              value={form.address}
-              onChangeText={(text) => setField('address', text)}
-              onBlur={() => validateField('address')}
-              error={errors.address}
-              hint="Where we can reach you, and where your jobs are matched from"
-              multiline
-            />
-          </Card>
+                <Field
+                  label="Residential or office address"
+                  icon={(color, size) => <MapPin color={color} size={size} />}
+                  placeholder="14 Awolowo Road, Ikoyi, Lagos"
+                  value={form.address}
+                  onChangeText={(text) => setField('address', text)}
+                  onBlur={() => validateField('address')}
+                  error={errors.address}
+                  hint="Where we can reach you, and where your jobs are matched from"
+                  multiline
+                />
+              </Card>
 
-          {/* Vehicle and coverage */}
-          <Card style={styles.card}>
-            <SectionHeading icon={<Truck color={theme.primary} size={18} />} title="Your vehicle" />
+              {/* Vehicle and coverage */}
+              <Card style={styles.card}>
+                <SectionHeading
+                  icon={<Truck color={theme.primary} size={18} />}
+                  title="Your vehicle"
+                />
 
-            <Dropdown
-              label="State of operation"
-              options={NIGERIA_STATES}
-              searchable
-              searchPlaceholder="Search state"
-              selected={form.state}
-              onSelect={(value) => setField('state', value)}
-              icon={(color, size) => <Building2 color={color} size={size} />}
-            />
+                <Dropdown
+                  label="State of operation"
+                  options={NIGERIA_STATES}
+                  searchable
+                  searchPlaceholder="Search state"
+                  selected={form.state}
+                  onSelect={(value) => setField('state', value)}
+                  icon={(color, size) => <Building2 color={color} size={size} />}
+                />
 
-            <View style={styles.pickerField}>
-              <View style={styles.pickerLabelRow}>
-                <Bike color={theme.textSecondary} size={16} />
-                <Text style={[styles.pickerLabel, { color: theme.textSecondary }]}>
-                  Vehicle type
+                <View style={styles.pickerField}>
+                  <View style={styles.pickerLabelRow}>
+                    <Bike color={theme.textSecondary} size={16} />
+                    <Text style={[styles.pickerLabel, { color: theme.textSecondary }]}>
+                      Vehicle type
+                    </Text>
+                  </View>
+                  <ChipGroup
+                    options={VEHICLE_TYPES}
+                    selected={form.vehicleType}
+                    onSelect={(value) => setField('vehicleType', value)}
+                  />
+                </View>
+
+                <Field
+                  label="Vehicle plate number"
+                  icon={(color, size) => <Hash color={color} size={size} />}
+                  placeholder="ABC-123DE"
+                  value={form.plateNumber}
+                  onChangeText={(text) => setField('plateNumber', text.toUpperCase())}
+                  onBlur={() => validateField('plateNumber')}
+                  error={errors.plateNumber}
+                  autoCapitalize="characters"
+                  autoCorrect={false}
+                  maxLength={12}
+                />
+
+                <Field
+                  label="Driver licence ID"
+                  icon={(color, size) => <IdCard color={color} size={size} />}
+                  placeholder="ABC123456789"
+                  value={form.licenseId}
+                  onChangeText={(text) => setField('licenseId', text)}
+                  onBlur={() => validateField('licenseId')}
+                  error={errors.licenseId}
+                  hint={`${LICENCE_LENGTH} letters or numbers`}
+                  maxLength={LICENCE_LENGTH}
+                  autoCapitalize="characters"
+                  autoCorrect={false}
+                />
+              </Card>
+            </>
+          )}
+
+          {step === 1 && (
+            <>
+              {/* Guarantor */}
+              <Card style={styles.card}>
+                <SectionHeading
+                  icon={<UserCheck color={theme.primary} size={18} />}
+                  title="Guarantor information"
+                />
+                <Text style={[styles.helper, { color: theme.textMuted }]}>
+                  Someone who can vouch for you. We contact them only if we need to verify your
+                  application.
                 </Text>
-              </View>
-              <ChipGroup
-                options={VEHICLE_TYPES}
-                selected={form.vehicleType}
-                onSelect={(value) => setField('vehicleType', value)}
-              />
-            </View>
 
-            <Field
-              label="Vehicle plate number"
-              icon={(color, size) => <Hash color={color} size={size} />}
-              placeholder="ABC-123DE"
-              value={form.plateNumber}
-              onChangeText={(text) => setField('plateNumber', text.toUpperCase())}
-              onBlur={() => validateField('plateNumber')}
-              error={errors.plateNumber}
-              autoCapitalize="characters"
-              autoCorrect={false}
-              maxLength={12}
-            />
+                <Field
+                  label="Guarantor's full name"
+                  icon={(color, size) => <UserRound color={color} size={size} />}
+                  placeholder="Ngozi Eze"
+                  value={form.guarantorName}
+                  onChangeText={(text) => setField('guarantorName', text)}
+                  onBlur={() => validateField('guarantorName')}
+                  error={errors.guarantorName}
+                  autoCapitalize="words"
+                />
 
-            <Field
-              label="Driver licence ID"
-              icon={(color, size) => <IdCard color={color} size={size} />}
-              placeholder="ABC123456789"
-              value={form.licenseId}
-              onChangeText={(text) => setField('licenseId', text)}
-              onBlur={() => validateField('licenseId')}
-              error={errors.licenseId}
-              hint={`${LICENCE_LENGTH} letters or numbers`}
-              maxLength={LICENCE_LENGTH}
-              autoCapitalize="characters"
-              autoCorrect={false}
-            />
-          </Card>
+                <ValidatedPhoneInput
+                  label="Guarantor's phone number"
+                  value={form.guarantorPhone}
+                  onChangeText={(text) => setField('guarantorPhone', text)}
+                  onBlur={() => validateField('guarantorPhone')}
+                  showError={Boolean(errors.guarantorPhone)}
+                />
 
-          {/* Guarantor */}
-          <Card style={styles.card}>
-            <SectionHeading
-              icon={<UserCheck color={theme.primary} size={18} />}
-              title="Guarantor information"
-            />
-            <Text style={[styles.helper, { color: theme.textMuted }]}>
-              Someone who can vouch for you. We contact them only if we need to verify your
-              application.
-            </Text>
+                <Dropdown
+                  label="Relationship"
+                  options={GUARANTOR_RELATIONSHIPS}
+                  selected={form.guarantorRelationship}
+                  onSelect={(value) => setField('guarantorRelationship', value)}
+                  icon={(color, size) => <UserCheck color={color} size={size} />}
+                />
 
-            <Field
-              label="Guarantor's full name"
-              icon={(color, size) => <UserRound color={color} size={size} />}
-              placeholder="Ngozi Eze"
-              value={form.guarantorName}
-              onChangeText={(text) => setField('guarantorName', text)}
-              onBlur={() => validateField('guarantorName')}
-              error={errors.guarantorName}
-              autoCapitalize="words"
-            />
+                <Field
+                  label="Residential or office address"
+                  icon={(color, size) => <MapPin color={color} size={size} />}
+                  placeholder="14 Awolowo Road, Ikoyi, Lagos"
+                  value={form.guarantorAddress}
+                  onChangeText={(text) => setField('guarantorAddress', text)}
+                  onBlur={() => validateField('guarantorAddress')}
+                  error={errors.guarantorAddress}
+                  multiline
+                />
 
-            <ValidatedPhoneInput
-              label="Guarantor's phone number"
-              value={form.guarantorPhone}
-              onChangeText={(text) => setField('guarantorPhone', text)}
-              onBlur={() => validateField('guarantorPhone')}
-              showError={Boolean(errors.guarantorPhone)}
-            />
-
-            <Dropdown
-              label="Relationship"
-              options={GUARANTOR_RELATIONSHIPS}
-              selected={form.guarantorRelationship}
-              onSelect={(value) => setField('guarantorRelationship', value)}
-              icon={(color, size) => <UserCheck color={color} size={size} />}
-            />
-
-            <Field
-              label="Residential or office address"
-              icon={(color, size) => <MapPin color={color} size={size} />}
-              placeholder="14 Awolowo Road, Ikoyi, Lagos"
-              value={form.guarantorAddress}
-              onChangeText={(text) => setField('guarantorAddress', text)}
-              onBlur={() => validateField('guarantorAddress')}
-              error={errors.guarantorAddress}
-              multiline
-            />
-
-            {/*
+                {/*
               Required, unlike the applicant's own NIN above — a guarantor is
               only worth having if they can actually be identified.
             */}
-            <Field
-              label="Guarantor's NIN"
-              icon={(color, size) => <IdCard color={color} size={size} />}
-              placeholder="12345678901"
-              value={form.guarantorNin}
-              onChangeText={(text) =>
-                setField('guarantorNin', text.replace(/\D/g, '').slice(0, NIN_LENGTH))
-              }
-              onBlur={() => validateField('guarantorNin')}
-              error={errors.guarantorNin}
-              hint={`Required — ${NIN_LENGTH} digits. Adds an extra layer of trust and security.`}
-              keyboardType="number-pad"
-              maxLength={NIN_LENGTH}
-            />
-          </Card>
+                <Field
+                  label="Guarantor's NIN"
+                  icon={(color, size) => <IdCard color={color} size={size} />}
+                  placeholder="12345678901"
+                  value={form.guarantorNin}
+                  onChangeText={(text) =>
+                    setField('guarantorNin', text.replace(/\D/g, '').slice(0, NIN_LENGTH))
+                  }
+                  onBlur={() => validateField('guarantorNin')}
+                  error={errors.guarantorNin}
+                  hint={`Required — ${NIN_LENGTH} digits. Adds an extra layer of trust and security.`}
+                  keyboardType="number-pad"
+                  maxLength={NIN_LENGTH}
+                />
+              </Card>
+              {/* Next of kin */}
+              <Card style={styles.card}>
+                <SectionHeading
+                  icon={<HeartPulse color={theme.primary} size={18} />}
+                  title="Emergency contact (next of kin)"
+                />
+                <Text style={[styles.helper, { color: theme.textMuted }]}>
+                  Who we call if something happens while you are on a delivery.
+                </Text>
 
-          {/* Payout account */}
-          <Card style={styles.card}>
-            <SectionHeading
-              icon={<Banknote color={theme.primary} size={18} />}
-              title="Payout account details"
-            />
-            <Text style={[styles.helper, { color: theme.textMuted }]}>
-              Where your delivery earnings are paid. The account must be in your own name.
-            </Text>
+                <Field
+                  label="Next of kin's name"
+                  icon={(color, size) => <UserRound color={color} size={size} />}
+                  placeholder="Emeka Nwosu"
+                  value={form.kinName}
+                  onChangeText={(text) => setField('kinName', text)}
+                  onBlur={() => validateField('kinName')}
+                  error={errors.kinName}
+                  autoCapitalize="words"
+                />
 
-            <Dropdown
-              label="Bank name"
-              options={NIGERIAN_BANKS}
-              searchable
-              searchPlaceholder="Search bank"
-              selected={form.bankName}
-              onSelect={(value) => setField('bankName', value)}
-              icon={(color, size) => <Landmark color={color} size={size} />}
-            />
+                <ValidatedPhoneInput
+                  label="Next of kin's phone number"
+                  value={form.kinPhone}
+                  onChangeText={(text) => setField('kinPhone', text)}
+                  onBlur={() => validateField('kinPhone')}
+                  showError={Boolean(errors.kinPhone)}
+                />
 
-            <Field
-              label="Account number"
-              icon={(color, size) => <Hash color={color} size={size} />}
-              placeholder="0123456789"
-              value={form.accountNumber}
-              onChangeText={(text) =>
-                setField('accountNumber', text.replace(/\D/g, '').slice(0, NUBAN_LENGTH))
-              }
-              onBlur={() => validateField('accountNumber')}
-              error={errors.accountNumber}
-              hint={`${NUBAN_LENGTH}-digit NUBAN`}
-              keyboardType="number-pad"
-              maxLength={NUBAN_LENGTH}
-            />
+                <Dropdown
+                  label="Relationship"
+                  options={NEXT_OF_KIN_RELATIONSHIPS}
+                  selected={form.kinRelationship}
+                  onSelect={(value) => setField('kinRelationship', value)}
+                  icon={(color, size) => <HeartPulse color={color} size={size} />}
+                />
+              </Card>
+            </>
+          )}
 
-            <Field
-              label="Account name"
-              icon={(color, size) => <UserRound color={color} size={size} />}
-              placeholder="As it appears on your bank statement"
-              value={form.accountName}
-              onChangeText={(text) => setField('accountName', text)}
-              onBlur={() => validateField('accountName')}
-              error={errors.accountName}
-              /*
+          {step === 2 && (
+            <>
+              {/* Payout account */}
+              <Card style={styles.card}>
+                <SectionHeading
+                  icon={<Banknote color={theme.primary} size={18} />}
+                  title="Payout account details"
+                />
+                <Text style={[styles.helper, { color: theme.textMuted }]}>
+                  Where your delivery earnings are paid. The account must be in your own name.
+                </Text>
+
+                <Dropdown
+                  label="Bank name"
+                  options={NIGERIAN_BANKS}
+                  searchable
+                  searchPlaceholder="Search bank"
+                  selected={form.bankName}
+                  onSelect={(value) => setField('bankName', value)}
+                  icon={(color, size) => <Landmark color={color} size={size} />}
+                />
+
+                <Field
+                  label="Account number"
+                  icon={(color, size) => <Hash color={color} size={size} />}
+                  placeholder="0123456789"
+                  value={form.accountNumber}
+                  onChangeText={(text) =>
+                    setField('accountNumber', text.replace(/\D/g, '').slice(0, NUBAN_LENGTH))
+                  }
+                  onBlur={() => validateField('accountNumber')}
+                  error={errors.accountNumber}
+                  hint={`${NUBAN_LENGTH}-digit NUBAN`}
+                  keyboardType="number-pad"
+                  maxLength={NUBAN_LENGTH}
+                />
+
+                <Field
+                  label="Account name"
+                  icon={(color, size) => <UserRound color={color} size={size} />}
+                  placeholder="As it appears on your bank statement"
+                  value={form.accountName}
+                  onChangeText={(text) => setField('accountName', text)}
+                  onBlur={() => validateField('accountName')}
+                  error={errors.accountName}
+                  /*
                 Typed by hand for now. A real build resolves this from the bank
                 and account number via a name-enquiry call, then locks the field.
               */
-              hint="Typed for now — will be verified against your bank"
-              autoCapitalize="words"
-            />
-          </Card>
+                  hint="Typed for now — will be verified against your bank"
+                  autoCapitalize="words"
+                />
+              </Card>
+              {/* Documents */}
+              <Card style={styles.card}>
+                <SectionHeading
+                  icon={<FileCheck2 color={theme.primary} size={18} />}
+                  title="Documents"
+                />
+                <Text style={[styles.helper, { color: theme.textMuted }]}>
+                  Your licence and insurance need the expiry date printed on them. LOCI reminds you
+                  a month before either lapses — once one has, we have to stop offering you parcels
+                  until it is renewed.
+                </Text>
 
-          {/* Next of kin */}
-          <Card style={styles.card}>
-            <SectionHeading
-              icon={<HeartPulse color={theme.primary} size={18} />}
-              title="Emergency contact (next of kin)"
-            />
-            <Text style={[styles.helper, { color: theme.textMuted }]}>
-              Who we call if something happens while you are on a delivery.
-            </Text>
+                {DOCUMENTS.map((doc) => (
+                  <DocumentRow
+                    key={doc.key}
+                    label={doc.label}
+                    hint={doc.hint}
+                    document={documents[doc.key]}
+                    error={errors[doc.key]}
+                    onAttach={() => attachDocument(doc.key, doc.label)}
+                    onRemove={() => removeDocument(doc.key)}
+                    expiry={doc.expiry}
+                    expiryValue={expiries[doc.key] ?? ''}
+                    expiryError={errors[`${doc.key}Expiry` as keyof FieldErrors]}
+                    onExpiryChange={(next) =>
+                      setExpiries((current) => ({ ...current, [doc.key]: next }))
+                    }
+                  />
+                ))}
+              </Card>
 
-            <Field
-              label="Next of kin's name"
-              icon={(color, size) => <UserRound color={color} size={size} />}
-              placeholder="Emeka Nwosu"
-              value={form.kinName}
-              onChangeText={(text) => setField('kinName', text)}
-              onBlur={() => validateField('kinName')}
-              error={errors.kinName}
-              autoCapitalize="words"
-            />
+              {/*
+                The confirmation, immediately above the button it gates.
 
-            <ValidatedPhoneInput
-              label="Next of kin's phone number"
-              value={form.kinPhone}
-              onChangeText={(text) => setField('kinPhone', text)}
-              onBlur={() => validateField('kinPhone')}
-              showError={Boolean(errors.kinPhone)}
-            />
-
-            <Dropdown
-              label="Relationship"
-              options={NEXT_OF_KIN_RELATIONSHIPS}
-              selected={form.kinRelationship}
-              onSelect={(value) => setField('kinRelationship', value)}
-              icon={(color, size) => <HeartPulse color={color} size={size} />}
-            />
-          </Card>
-
-          {/* Documents */}
-          <Card style={styles.card}>
-            <SectionHeading
-              icon={<FileCheck2 color={theme.primary} size={18} />}
-              title="Documents"
-            />
-            <Text style={[styles.helper, { color: theme.textMuted }]}>
-              Your licence and insurance need the expiry date printed on them. LOCI reminds you a
-              month before either lapses — once one has, we have to stop offering you parcels until
-              it is renewed.
-            </Text>
-
-            {DOCUMENTS.map((doc) => (
-              <DocumentRow
-                key={doc.key}
-                label={doc.label}
-                hint={doc.hint}
-                document={documents[doc.key]}
-                error={errors[doc.key]}
-                onAttach={() => attachDocument(doc.key, doc.label)}
-                onRemove={() => removeDocument(doc.key)}
-                expiry={doc.expiry}
-                expiryValue={expiries[doc.key] ?? ''}
-                expiryError={errors[`${doc.key}Expiry` as keyof FieldErrors]}
-                onExpiryChange={(next) =>
-                  setExpiries((current) => ({ ...current, [doc.key]: next }))
-                }
+                Far enough down that somebody has passed every field to reach
+                it, and close enough to the button that the two read as one
+                action. Placed between them rather than above the documents card
+                so there is nothing to scroll past between ticking and pressing.
+              */}
+              <ConfirmCheckbox
+                checked={confirmed}
+                onChange={setConfirmed}
+                disabled={isSubmitting}
+                label="I confirm that all provided details, documents, and bank information are accurate and belong to me."
               />
-            ))}
-          </Card>
+            </>
+          )}
 
-          <Button
-            label={isSubmitting ? 'Submitting…' : 'Submit Application'}
-            icon={(color, size) =>
-              isSubmitting ? (
-                <ActivityIndicator color={color} size="small" />
-              ) : (
-                <ClipboardCheck color={color} size={size} />
-              )
+          {/*
+            Back and Next, or Back and Submit.
+
+            ⚠ Submit is disabled by the checkbox and by a malformed email, and
+              by nothing else. Disabling it on incomplete fields would leave an
+              applicant staring at a dead button with no indication of which of
+              thirty inputs is at fault — `handleSubmit` runs the validation and
+              sends them to the step that has the problem instead.
+          */}
+          <WizardNav
+            onBack={step > 0 ? goBack : undefined}
+            onNext={goNext}
+            busy={isSubmitting}
+            finalAction={
+              step === STEPS.length - 1 ? (
+                <Button
+                  label={isSubmitting ? 'Submitting…' : 'Submit Application'}
+                  icon={(color, size) =>
+                    isSubmitting ? (
+                      <ActivityIndicator color={color} size="small" />
+                    ) : (
+                      <ClipboardCheck color={color} size={size} />
+                    )
+                  }
+                  onPress={handleSubmit}
+                  // Blocked until confirmed, and while the email is malformed.
+                  disabled={isSubmitting || !confirmed || !isValidEmail(form.email)}
+                />
+              ) : undefined
             }
-            onPress={handleSubmit}
-            // Also blocked while the email is malformed.
-            disabled={isSubmitting || !isValidEmail(form.email)}
           />
         </View>
       </ScrollView>

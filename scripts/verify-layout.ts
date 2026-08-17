@@ -121,10 +121,24 @@ const scrollStart = bookCode.indexOf('ref={scrollRef}');
 
 const pinnedBlock = bookCode.slice(bookCode.indexOf('<KeyboardAvoidingView'), scrollStart);
 
+/*
+ * The title, not the component that used to render it.
+ *
+ * This pinned `<ScreenHeader`, which stopped being how the title is drawn when
+ * the header was slimmed — `ScreenHeader` renders at 28px with 24px of margin,
+ * which cost about 60px of a phone screen on each of three wizard steps for a
+ * word the tab bar already says. The property under test is unchanged: whatever
+ * draws the title, it must sit above the scroller.
+ */
 check(
   'the screen title is outside the ScrollView',
-  pinnedBlock.includes('<ScreenHeader'),
+  /Post a Parcel/.test(pinnedBlock),
   'inside it, the title scrolls away under the status bar — the reported bug',
+);
+check(
+  'and it is no longer a full ScreenHeader',
+  !pinnedBlock.includes('<ScreenHeader'),
+  'a 28px title pinned above a three-step form spends a phone screen on one word',
 );
 check(
   'the delivery type selector is outside the ScrollView',

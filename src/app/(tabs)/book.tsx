@@ -37,11 +37,16 @@ import { SegmentedControl } from '@/components/ui/chip';
 import { Dropdown, ToggleRow } from '@/components/ui/dropdown';
 import { Field } from '@/components/ui/field';
 import { ModeSelector, type ModeOption } from '@/components/ui/mode-selector';
+import {
+  ConfirmCheckbox,
+  WizardNav,
+  WizardProgress,
+  type WizardStep,
+} from '@/components/ui/form-wizard';
 import { PhotoPicker } from '@/components/ui/photo-picker';
 import { resolveSenderPhoto, SenderPhotoSheet } from '@/components/ui/sender-photo-sheet';
 import { SelectableUpgradeCard } from '@/components/ui/selectable-upgrade-card';
 import { ValidatedPhoneInput } from '@/components/ValidatedPhoneInput';
-import { ScreenHeader, SectionLabel } from '@/components/ui/screen';
 import { FontSize, MaxContentWidth, Radius, Spacing, Typography, font } from '@/constants/theme';
 import { findHub, hubLabel, hubsForCity, type Hub } from '@/constants/hubs';
 import { useHubs } from '@/store/hubs';
@@ -167,6 +172,72 @@ type BookingForm = {
 };
 
 type FieldErrors = Partial<Record<keyof BookingForm, string>>;
+
+/**
+ * Posting a parcel, in three sittings.
+ *
+ * ⚠ The split follows the *questions*, not the old cards.
+ *
+ *   Page one is about the thing being sent, page two about the person sending
+ *   it, page three about the person receiving it. Sender identity — the NIN and
+ *   the slip — moves onto page two with the pickup details, because it belongs
+ *   to the sender rather than to the parcel, and it was previously buried in
+ *   the middle of a form that had already asked about weight and fragility.
+ *
+ * ⚠ `deliveryType` is on no step, deliberately.
+ *
+ *   It is the pill toggle pinned above the wizard, visible on all three pages,
+ *   because it changes the price and the shape of every question after it. It
+ *   is validated by having no invalid state — a segmented control cannot be
+ *   empty — so it needs no step to own it.
+ */
+const STEPS: WizardStep[] = [
+  { key: 'item', label: 'Item' },
+  { key: 'pickup', label: 'Pickup & you' },
+  { key: 'dropoff', label: 'Dropoff & review' },
+];
+
+/** Which booking fields each step is responsible for. */
+const STEP_FIELDS: (keyof BookingForm)[][] = [
+  ['itemDescription', 'itemPhotoUri', 'category', 'weight', 'declaredValue', 'fragile'],
+  [
+    'pickupMode',
+    'originCity',
+    'pickupHubId',
+    'pickupAreaSelection',
+    'pickupAreaCustom',
+    'pickupAddress',
+    'pickupContactName',
+    'senderPhone',
+  ],
+  [
+    'dropoffMode',
+    'destinationCity',
+    'dropoffAreaSelection',
+    'dropoffAreaCustom',
+    'dropoffAddress',
+    'recipientName',
+    'recipientPhone',
+    'notes',
+  ],
+];
+
+/**
+ * This step's share of the errors.
+ *
+ * Runs the whole `validate` and filters, so a step cannot disagree with submit
+ * about what a valid weight is. Sender identity is checked separately — see the
+ * note in `handleSubmit` on why it is not inside `validate` — so it is folded
+ * into step two here rather than being a fourth list.
+ */
+function errorsForStep(step: number, all: FieldErrors): FieldErrors {
+  const keys = new Set<string>(STEP_FIELDS[step] ?? []);
+  const mine: FieldErrors = {};
+  for (const [key, message] of Object.entries(all)) {
+    if (keys.has(key)) mine[key as keyof FieldErrors] = message;
+  }
+  return mine;
+}
 
 const INITIAL_FORM: BookingForm = {
   deliveryType: 'local',
@@ -352,6 +423,16 @@ export default function BookScreen() {
     saveDraft(form);
   }, [draftReady, form, saveDraft]);
   const [errors, setErrors] = useState<FieldErrors>({});
+
+  /*
+   * Which sitting, and whether they have confirmed.
+   *
+   * The step is not part of the saved draft: the answers survive a trip to
+   * sign-in, the position does not. Landing back on page three with no memory
+   * of one and two is disorienting, and re-reading your own answers is cheap.
+   */
+  const [step, setStep] = useState(0);
+  const [confirmed, setConfirmed] = useState(false);
 
   /*
    * ---------- Identity ----------
@@ -604,6 +685,52 @@ export default function BookScreen() {
     setErrors((prev) => ({ ...prev, destinationCity: undefined }));
   };
 
+  /**
+   * Forward, if this step is complete.
+   *
+   * ⚠ Only this step's errors are written, and step two also runs the identity
+   *   check.
+   *
+   *   `validate` is a pure function about parcels and knows nothing about NINs
+   *   — see `handleSubmit` — so the sender's identity is checked alongside it
+   *   rather than inside it. Step two is where the sender is asked about, so
+   *   step two is where that check belongs; leaving it to submit would let
+   *   somebody reach the last page and be sent back two.
+   */
+  const goNext = () => {
+    const all = validate(form, allHubs);
+    const mine = errorsForStep(step, all);
+
+    let identityBad: { nin?: string; slip?: string } = {};
+    if (step === 1 && identityPath === 'onboarding') {
+      const badNin = ninError(nin);
+      if (badNin) identityBad.nin = badNin;
+      if (!slipUri) identityBad.slip = 'Add a photo of your NIN slip.';
+      setIdentityErrors(identityBad);
+    }
+
+    if (Object.keys(mine).length + Object.keys(identityBad).length > 0) {
+      setErrors((previous) => ({ ...previous, ...mine }));
+      return;
+    }
+
+    /*
+     * Clear this step's messages on the way out, so a field corrected after it
+     * errored does not keep its red text when somebody comes back to it.
+     */
+    setErrors((previous) => {
+      const next = { ...previous };
+      for (const key of Object.keys(errorsForStep(step, previous))) {
+        delete next[key as keyof FieldErrors];
+      }
+      return next;
+    });
+
+    setStep((current) => Math.min(current + 1, STEPS.length - 1));
+  };
+
+  const goBack = () => setStep((current) => Math.max(current - 1, 0));
+
   const handleSubmit = () => {
     const nextErrors = validate(form, allHubs);
     setErrors(nextErrors);
@@ -627,7 +754,28 @@ export default function BookScreen() {
     setIdentityErrors(nextIdentityErrors);
 
     if (Object.keys(nextErrors).length + Object.keys(nextIdentityErrors).length > 0) {
-      showDialog('Check the form', 'Some required details are missing or invalid.');
+      /*
+       * ⚠ Sent to the step that has the problem, not just told there is one.
+       *
+       *   "Some required details are missing or invalid" was tolerable on a
+       *   single page where the red field was somewhere on screen. Across three
+       *   pages it is a dead end: the offending field may be two steps back and
+       *   nothing says so. The dialog now names the step and the form goes
+       *   there.
+       */
+      const firstBad =
+        Object.keys(nextIdentityErrors).length > 0
+          ? 1
+          : STEPS.findIndex((_, index) => Object.keys(errorsForStep(index, nextErrors)).length > 0);
+
+      if (firstBad >= 0) setStep(firstBad);
+
+      showDialog(
+        'Check the form',
+        firstBad >= 0
+          ? `Something on "${STEPS[firstBad].label}" is missing or invalid. We have taken you back to it.`
+          : 'Some required details are missing or invalid.',
+      );
       return;
     }
 
@@ -816,23 +964,39 @@ export default function BookScreen() {
           { backgroundColor: theme.background, borderBottomColor: theme.border },
         ]}>
         <View style={styles.pinnedInner}>
-          <ScreenHeader brand={false} title="Post a Parcel" />
+          {/*
+            A title, not a screen header.
 
-          {/* 1 — Delivery type */}
-          <View>
-            <SectionLabel>Delivery type</SectionLabel>
-            <SegmentedControl
-              options={DELIVERY_TYPES}
-              selected={form.deliveryType}
-              onSelect={setDeliveryType}
-              renderLabel={(type) => DELIVERY_TYPE_TITLES[type]}
-            />
-            <Text style={[styles.hint, { color: theme.textMuted }]}>
-              {isLocal
-                ? `Within one city · base ${formatNaira(PRICING.base.local)} + ${formatNaira(PRICING.perKg.local)}/kg`
-                : `Between two cities · base ${formatNaira(PRICING.base.interstate)} + ${formatNaira(PRICING.perKg.interstate)}/kg`}
-            </Text>
-          </View>
+            `ScreenHeader` renders at `screenTitle` — 28px with 24px of margin
+            beneath — which is right for a page you arrive at and read, and wrong
+            for a strip that stays pinned above a scrolling form. It was costing
+            about 60px of a phone's screen on every one of three pages, in
+            service of a word the tab bar already says.
+
+            The delivery-type pills matter far more than the title does: they
+            change the price and the shape of every question below, and they are
+            the one control that stays live across all three steps. So they get
+            the space.
+          */}
+          <Text style={[styles.pinnedTitle, { color: theme.text }]}>Post a Parcel</Text>
+
+          <SegmentedControl
+            options={DELIVERY_TYPES}
+            selected={form.deliveryType}
+            onSelect={setDeliveryType}
+            renderLabel={(type) => DELIVERY_TYPE_TITLES[type]}
+          />
+
+          {/*
+            The pricing line stays. It is the only place the base fare appears
+            before the summary on page three, and somebody choosing between the
+            two pills is choosing on price.
+          */}
+          <Text style={[styles.hint, { color: theme.textMuted }]}>
+            {isLocal
+              ? `Within one city · base ${formatNaira(PRICING.base.local)} + ${formatNaira(PRICING.perKg.local)}/kg`
+              : `Between two cities · base ${formatNaira(PRICING.base.interstate)} + ${formatNaira(PRICING.perKg.interstate)}/kg`}
+          </Text>
         </View>
       </View>
 
@@ -843,207 +1007,216 @@ export default function BookScreen() {
         keyboardShouldPersistTaps="handled"
         keyboardDismissMode="on-drag">
         <View style={styles.content}>
-          {/* 2 — Item details */}
-          <Card
-            style={styles.card}
-            onLayout={(event) => {
-              itemCardY.current = event.nativeEvent.layout.y;
-            }}>
-            <SectionHeading
-              icon={<PackageOpen color={theme.primary} size={18} />}
-              title="Item details"
-            />
+          {/* --------------------------------------------- the wizard ---- */}
+          <WizardProgress steps={STEPS} current={step} onJump={setStep} />
 
-            <Field
-              label="Item title"
-              icon={(color, size) => <Tag color={color} size={size} />}
-              placeholder="Laptop charger and cables"
-              value={form.itemDescription}
-              onChangeText={(text) => setField('itemDescription', text)}
-              error={errors.itemDescription}
-            />
+          {step === 0 && (
+            <>
+              {/* 2 — Item details */}
+              <Card
+                style={styles.card}
+                onLayout={(event) => {
+                  itemCardY.current = event.nativeEvent.layout.y;
+                }}>
+                <SectionHeading
+                  icon={<PackageOpen color={theme.primary} size={18} />}
+                  title="Item details"
+                />
 
-            <Dropdown
-              label="Category"
-              options={CATEGORIES}
-              selected={form.category}
-              onSelect={(value) => setField('category', value)}
-              icon={(color, size) => <PackageOpen color={color} size={size} />}
-            />
+                <Field
+                  label="Item title"
+                  icon={(color, size) => <Tag color={color} size={size} />}
+                  placeholder="Laptop charger and cables"
+                  value={form.itemDescription}
+                  onChangeText={(text) => setField('itemDescription', text)}
+                  error={errors.itemDescription}
+                />
 
-            {/*
+                <Dropdown
+                  label="Category"
+                  options={CATEGORIES}
+                  selected={form.category}
+                  onSelect={(value) => setField('category', value)}
+                  icon={(color, size) => <PackageOpen color={color} size={size} />}
+                />
+
+                {/*
               Required. This form marks optional fields and leaves required ones
               plain, so there is no asterisk here — adding one to a single field
               would imply everything else is optional.
             */}
-            <PhotoPicker
-              label="Photo of the parcel"
-              hint="Confirms the parcel's condition at handover and collection."
-              value={form.itemPhotoUri}
-              onChange={(uri) => setField('itemPhotoUri', uri)}
-              error={errors.itemPhotoUri}
-            />
-
-            <View style={styles.row}>
-              <View style={styles.rowItem}>
-                <Field
-                  label="Weight (kg)"
-                  icon={(color, size) => <Weight color={color} size={size} />}
-                  placeholder="2.5"
-                  value={form.weight}
-                  onChangeText={(text) => setField('weight', text)}
-                  error={errors.weight}
-                  keyboardType="decimal-pad"
+                <PhotoPicker
+                  label="Photo of the parcel"
+                  hint="Confirms the parcel's condition at handover and collection."
+                  value={form.itemPhotoUri}
+                  onChange={(uri) => setField('itemPhotoUri', uri)}
+                  error={errors.itemPhotoUri}
                 />
-              </View>
-              <View style={styles.rowItem}>
-                <Field
-                  inputRef={declaredValueRef}
-                  label="Declared value (₦)"
-                  icon={(color, size) => <Banknote color={color} size={size} />}
-                  placeholder="45,000"
-                  value={form.declaredValue}
-                  onChangeText={(text) => setField('declaredValue', formatAmountInput(text))}
-                  error={errors.declaredValue}
-                  hint={errors.declaredValue ? undefined : 'For insurance'}
-                  keyboardType="number-pad"
+
+                <View style={styles.row}>
+                  <View style={styles.rowItem}>
+                    <Field
+                      label="Weight (kg)"
+                      icon={(color, size) => <Weight color={color} size={size} />}
+                      placeholder="2.5"
+                      value={form.weight}
+                      onChangeText={(text) => setField('weight', text)}
+                      error={errors.weight}
+                      keyboardType="decimal-pad"
+                    />
+                  </View>
+                  <View style={styles.rowItem}>
+                    <Field
+                      inputRef={declaredValueRef}
+                      label="Declared value (₦)"
+                      icon={(color, size) => <Banknote color={color} size={size} />}
+                      placeholder="45,000"
+                      value={form.declaredValue}
+                      onChangeText={(text) => setField('declaredValue', formatAmountInput(text))}
+                      error={errors.declaredValue}
+                      hint={errors.declaredValue ? undefined : 'For insurance'}
+                      keyboardType="number-pad"
+                    />
+                  </View>
+                </View>
+
+                <ToggleRow
+                  label="Fragile / Handle with care"
+                  description="Flags the job for drivers to ensure careful handling at no extra cost"
+                  value={form.fragile}
+                  onValueChange={(value) => setField('fragile', value)}
+                  icon={(color, size) => <ShieldAlert color={color} size={size} />}
                 />
-              </View>
-            </View>
+              </Card>
+            </>
+          )}
 
-            <ToggleRow
-              label="Fragile / Handle with care"
-              description="Flags the job for drivers to ensure careful handling at no extra cost"
-              value={form.fragile}
-              onValueChange={(value) => setField('fragile', value)}
-              icon={(color, size) => <ShieldAlert color={color} size={size} />}
-            />
-          </Card>
+          {step === 1 && (
+            <>
+              {/* 3 — Locations & route */}
+              <Card style={styles.card}>
+                <SectionHeading icon={<MapPin color={theme.primary} size={18} />} title="Pickup" />
 
-          {/* 3 — Locations & route */}
-          <Card style={styles.card}>
-            <SectionHeading icon={<MapPin color={theme.primary} size={18} />} title="Pickup" />
+                <ModeSelector
+                  label="How should a driver pick up the item(s)?"
+                  value={form.pickupMode}
+                  options={PICKUP_MODES}
+                  onChange={(value) => setField('pickupMode', value)}
+                />
 
-            <ModeSelector
-              label="How should a driver pick up the item(s)?"
-              value={form.pickupMode}
-              options={PICKUP_MODES}
-              onChange={(value) => setField('pickupMode', value)}
-            />
+                <Dropdown
+                  label={isLocal ? 'Select city' : 'Origin hub'}
+                  options={CITIES}
+                  selected={form.originCity}
+                  onSelect={setOriginCity}
+                  renderLabel={cityHubLabel}
+                  icon={(color, size) => <Building2 color={color} size={size} />}
+                  // 37 cities — scrolling to "Yola" is a long way down.
+                  searchable
+                  searchPlaceholder="Search city or state"
+                />
 
-            <Dropdown
-              label={isLocal ? 'Select city' : 'Origin hub'}
-              options={CITIES}
-              selected={form.originCity}
-              onSelect={setOriginCity}
-              renderLabel={cityHubLabel}
-              icon={(color, size) => <Building2 color={color} size={size} />}
-              // 37 cities — scrolling to "Yola" is a long way down.
-              searchable
-              searchPlaceholder="Search city or state"
-            />
-
-            {/*
+                {/*
               Hub mode offers the actual partner hubs in the selected city, not
               neighbourhoods — the label promised LOCI locations, so the options
               have to be LOCI locations. Public-location pickup keeps the area
               picker, where naming a neighbourhood is the right question.
             */}
-            {form.pickupMode === 'hub' ? (
-              cityHubs.length > 0 ? (
-                <Dropdown
-                  label="Pickup LOCI area"
-                  options={cityHubs.map((hub) => hub.id)}
-                  selected={form.pickupHubId}
-                  onSelect={selectHub}
-                  renderLabel={(id) => {
-                    const hub = findHub(allHubs, id);
-                    return hub ? hubLabel(hub) : id;
-                  }}
-                  placeholder={`Choose a hub in ${form.originCity}`}
-                  icon={(color, size) => <Store color={color} size={size} />}
-                  /*
+                {form.pickupMode === 'hub' ? (
+                  cityHubs.length > 0 ? (
+                    <Dropdown
+                      label="Pickup LOCI area"
+                      options={cityHubs.map((hub) => hub.id)}
+                      selected={form.pickupHubId}
+                      onSelect={selectHub}
+                      renderLabel={(id) => {
+                        const hub = findHub(allHubs, id);
+                        return hub ? hubLabel(hub) : id;
+                      }}
+                      placeholder={`Choose a hub in ${form.originCity}`}
+                      icon={(color, size) => <Store color={color} size={size} />}
+                      /*
                     Matching runs on the rendered label — "LOCI Bodija Hub —
                     Bodija" — so typing either the hub name or the neighbourhood
                     finds it, which is how someone would actually look.
                   */
-                  searchable
-                  searchPlaceholder="Search hub or area"
-                  error={errors.pickupHubId}
-                />
-              ) : (
-                /*
+                      searchable
+                      searchPlaceholder="Search hub or area"
+                      error={errors.pickupHubId}
+                    />
+                  ) : (
+                    /*
                   33 of the 37 cities have no hub yet. Rather than an empty
                   dropdown, say so and offer the one action that unblocks them.
                 */
-                <View style={[styles.noHubs, { backgroundColor: theme.warningSoft }]}>
-                  <Store color={theme.warningOnSoft} size={16} />
-                  <View style={styles.noHubsText}>
-                    <Text style={[styles.noHubsTitle, { color: theme.warningOnSoft }]}>
-                      No LOCI hub in {form.originCity} yet
-                    </Text>
-                    <Text style={[styles.noHubsBody, { color: theme.warningOnSoft }]}>
-                      Switch to public location pickup and a driver will collect from a spot you
-                      choose, or pick a different origin city.
-                    </Text>
-                    <Button
-                      label="Use public location pickup"
-                      size="md"
-                      variant="secondary"
-                      style={styles.noHubsCta}
-                      onPress={() => setField('pickupMode', 'doorstep')}
-                    />
-                  </View>
-                </View>
-              )
-            ) : (
-              <AreaPicker
-                label="Pickup area"
-                city={form.originCity}
-                selection={form.pickupAreaSelection}
-                onSelectionChange={(value) => setField('pickupAreaSelection', value)}
-                customValue={form.pickupAreaCustom}
-                onCustomChange={(value) => setField('pickupAreaCustom', value)}
-                error={errors.pickupAreaSelection ?? errors.pickupAreaCustom}
-              />
-            )}
+                    <View style={[styles.noHubs, { backgroundColor: theme.warningSoft }]}>
+                      <Store color={theme.warningOnSoft} size={16} />
+                      <View style={styles.noHubsText}>
+                        <Text style={[styles.noHubsTitle, { color: theme.warningOnSoft }]}>
+                          No LOCI hub in {form.originCity} yet
+                        </Text>
+                        <Text style={[styles.noHubsBody, { color: theme.warningOnSoft }]}>
+                          Switch to public location pickup and a driver will collect from a spot you
+                          choose, or pick a different origin city.
+                        </Text>
+                        <Button
+                          label="Use public location pickup"
+                          size="md"
+                          variant="secondary"
+                          style={styles.noHubsCta}
+                          onPress={() => setField('pickupMode', 'doorstep')}
+                        />
+                      </View>
+                    </View>
+                  )
+                ) : (
+                  <AreaPicker
+                    label="Pickup area"
+                    city={form.originCity}
+                    selection={form.pickupAreaSelection}
+                    onSelectionChange={(value) => setField('pickupAreaSelection', value)}
+                    customValue={form.pickupAreaCustom}
+                    onCustomChange={(value) => setField('pickupAreaCustom', value)}
+                    error={errors.pickupAreaSelection ?? errors.pickupAreaCustom}
+                  />
+                )}
 
-            {/* A hub drop-off has no street address to collect from. */}
-            {form.pickupMode === 'doorstep' && (
-              <Field
-                label="Pickup address"
-                icon={(color, size) => <MapPin color={color} size={size} />}
-                placeholder="12 Awolowo Avenue"
-                value={form.pickupAddress}
-                onChangeText={(text) => setField('pickupAddress', text)}
-                error={errors.pickupAddress}
-                multiline
-              />
-            )}
+                {/* A hub drop-off has no street address to collect from. */}
+                {form.pickupMode === 'doorstep' && (
+                  <Field
+                    label="Pickup address"
+                    icon={(color, size) => <MapPin color={color} size={size} />}
+                    placeholder="12 Awolowo Avenue"
+                    value={form.pickupAddress}
+                    onChangeText={(text) => setField('pickupAddress', text)}
+                    error={errors.pickupAddress}
+                    multiline
+                  />
+                )}
 
-            <Field
-              label={form.pickupMode === 'hub' ? 'Who is dropping it off?' : 'Contact person'}
-              icon={(color, size) => <UserRound color={color} size={size} />}
-              placeholder="Who hands over the parcel"
-              value={form.pickupContactName}
-              onChangeText={(text) => setField('pickupContactName', text)}
-              error={errors.pickupContactName}
-              autoCapitalize="words"
-            />
+                <Field
+                  label={form.pickupMode === 'hub' ? 'Who is dropping it off?' : 'Contact person'}
+                  icon={(color, size) => <UserRound color={color} size={size} />}
+                  placeholder="Who hands over the parcel"
+                  value={form.pickupContactName}
+                  onChangeText={(text) => setField('pickupContactName', text)}
+                  error={errors.pickupContactName}
+                  autoCapitalize="words"
+                />
 
-            {/*
+                {/*
               At a hub the sender brings the parcel in, so "Pickup phone" names
               a collection that isn't happening. The number is the same contact
               either way.
             */}
-            <ValidatedPhoneInput
-              label={form.pickupMode === 'hub' ? 'Phone number' : 'Pickup phone'}
-              value={form.senderPhone}
-              onChangeText={(text) => setField('senderPhone', text)}
-              showError={Boolean(errors.senderPhone)}
-            />
+                <ValidatedPhoneInput
+                  label={form.pickupMode === 'hub' ? 'Phone number' : 'Pickup phone'}
+                  value={form.senderPhone}
+                  onChangeText={(text) => setField('senderPhone', text)}
+                  showError={Boolean(errors.senderPhone)}
+                />
 
-            {/*
+                {/*
               ---------- Identity ----------
 
               ⚠ Placed under Pickup, directly after the phone, because that is
@@ -1061,39 +1234,46 @@ export default function BookScreen() {
 
               Shows the full form on the first parcel and one line after that.
             */}
-            <IdentityOnboarding
-              path={identityPath}
-              identity={identity}
-              nin={nin}
-              onNin={setNin}
-              ninError={identityErrors.nin}
-              slipUri={slipUri}
-              onSlip={setSlipUri}
-              slipError={identityErrors.slip}
-            />
-          </Card>
+                <IdentityOnboarding
+                  path={identityPath}
+                  identity={identity}
+                  nin={nin}
+                  onNin={setNin}
+                  ninError={identityErrors.nin}
+                  slipUri={slipUri}
+                  onSlip={setSlipUri}
+                  slipError={identityErrors.slip}
+                />
+              </Card>
+            </>
+          )}
 
-          <Card style={styles.card}>
-            <SectionHeading icon={<Navigation color={theme.success} size={18} />} title="Dropoff" />
+          {step === 2 && (
+            <>
+              <Card style={styles.card}>
+                <SectionHeading
+                  icon={<Navigation color={theme.success} size={18} />}
+                  title="Dropoff"
+                />
 
-            {/*
+                {/*
               Hub collection is the default and needs no control — it's what
               happens unless the sender opts into a door run. The toggle below
               is the only choice, so a radio pair would have been two controls
               for one decision.
             */}
-            <View style={[styles.defaultNote, { backgroundColor: theme.surfaceMuted }]}>
-              <Building2 color={theme.textSecondary} size={16} />
-              <Text style={[styles.defaultNoteText, { color: theme.textSecondary }]}>
-                <Text style={[styles.defaultNoteValue, { color: theme.text }]}>
-                  LOCI hub (OTP Collection)
-                </Text>{' '}
-                — This only if uncollected, parcel will be moved to the LOCI hub. This transfer may
-                incur a mileage-based surcharge
-              </Text>
-            </View>
+                <View style={[styles.defaultNote, { backgroundColor: theme.surfaceMuted }]}>
+                  <Building2 color={theme.textSecondary} size={16} />
+                  <Text style={[styles.defaultNoteText, { color: theme.textSecondary }]}>
+                    <Text style={[styles.defaultNoteValue, { color: theme.text }]}>
+                      LOCI hub (OTP Collection)
+                    </Text>{' '}
+                    — This only if uncollected, parcel will be moved to the LOCI hub. This transfer
+                    may incur a mileage-based surcharge
+                  </Text>
+                </View>
 
-            {/*
+                {/*
               Two independent states over one field:
                 unselected        -> 'hub'        ₦0
                 selected, off     -> 'meetpoint'  ₦0
@@ -1101,243 +1281,277 @@ export default function BookScreen() {
               Selecting the card never turns the switch on, so choosing delivery
               to the recipient cannot silently add a fee.
             */}
-            <SelectableUpgradeCard
-              label={DOORSTEP_DROPOFF.label}
-              description={DOORSTEP_DROPOFF.description}
-              selected={form.dropoffMode !== 'hub'}
-              onSelectedChange={(on) => setField('dropoffMode', on ? 'meetpoint' : 'hub')}
-              upgraded={form.dropoffMode === 'doorstep'}
-              onUpgradedChange={(on) => setField('dropoffMode', on ? 'doorstep' : 'meetpoint')}
-              upgradeLabel={DOORSTEP_DROPOFF.upgradeLabel}
-              upgradeHint={DOORSTEP_DROPOFF.upgradeHint}
-              badge={SURCHARGE_BADGE}
-              icon={(color, size) => <Navigation color={color} size={size} />}
-            />
+                <SelectableUpgradeCard
+                  label={DOORSTEP_DROPOFF.label}
+                  description={DOORSTEP_DROPOFF.description}
+                  selected={form.dropoffMode !== 'hub'}
+                  onSelectedChange={(on) => setField('dropoffMode', on ? 'meetpoint' : 'hub')}
+                  upgraded={form.dropoffMode === 'doorstep'}
+                  onUpgradedChange={(on) => setField('dropoffMode', on ? 'doorstep' : 'meetpoint')}
+                  upgradeLabel={DOORSTEP_DROPOFF.upgradeLabel}
+                  upgradeHint={DOORSTEP_DROPOFF.upgradeHint}
+                  badge={SURCHARGE_BADGE}
+                  icon={(color, size) => <Navigation color={color} size={size} />}
+                />
 
-            {isLocal ? (
-              <View style={[styles.lockedCity, { backgroundColor: theme.surfaceMuted }]}>
-                <Building2 color={theme.textSecondary} size={16} />
-                <Text style={[styles.lockedCityText, { color: theme.textSecondary }]}>
-                  Same city —{' '}
-                  <Text style={[styles.lockedCityValue, { color: theme.text }]}>
-                    {cityHubLabel(form.originCity)}
-                  </Text>
-                </Text>
-              </View>
-            ) : (
-              <Dropdown
-                label="Destination hub"
-                options={CITIES}
-                selected={form.destinationCity}
-                onSelect={setDestinationCity}
-                renderLabel={cityHubLabel}
-                icon={(color, size) => <Building2 color={color} size={size} />}
-                searchable
-                searchPlaceholder="Search city or state"
-                error={errors.destinationCity}
-                // An inter-state trip can't start and end in the same hub.
-                disabledOptions={[form.originCity]}
-                disabledHint="Already your origin"
-              />
-            )}
+                {isLocal ? (
+                  <View style={[styles.lockedCity, { backgroundColor: theme.surfaceMuted }]}>
+                    <Building2 color={theme.textSecondary} size={16} />
+                    <Text style={[styles.lockedCityText, { color: theme.textSecondary }]}>
+                      Same city —{' '}
+                      <Text style={[styles.lockedCityValue, { color: theme.text }]}>
+                        {cityHubLabel(form.originCity)}
+                      </Text>
+                    </Text>
+                  </View>
+                ) : (
+                  <Dropdown
+                    label="Destination hub"
+                    options={CITIES}
+                    selected={form.destinationCity}
+                    onSelect={setDestinationCity}
+                    renderLabel={cityHubLabel}
+                    icon={(color, size) => <Building2 color={color} size={size} />}
+                    searchable
+                    searchPlaceholder="Search city or state"
+                    error={errors.destinationCity}
+                    // An inter-state trip can't start and end in the same hub.
+                    disabledOptions={[form.originCity]}
+                    disabledHint="Already your origin"
+                  />
+                )}
 
-            <AreaPicker
-              label="Dropoff area"
-              city={isLocal ? form.originCity : form.destinationCity}
-              selection={form.dropoffAreaSelection}
-              onSelectionChange={(value) => setField('dropoffAreaSelection', value)}
-              customValue={form.dropoffAreaCustom}
-              onCustomChange={(value) => setField('dropoffAreaCustom', value)}
-              error={errors.dropoffAreaSelection ?? errors.dropoffAreaCustom}
-            />
+                <AreaPicker
+                  label="Dropoff area"
+                  city={isLocal ? form.originCity : form.destinationCity}
+                  selection={form.dropoffAreaSelection}
+                  onSelectionChange={(value) => setField('dropoffAreaSelection', value)}
+                  customValue={form.dropoffAreaCustom}
+                  onCustomChange={(value) => setField('dropoffAreaCustom', value)}
+                  error={errors.dropoffAreaSelection ?? errors.dropoffAreaCustom}
+                />
 
-            {/*
+                {/*
               Hub collection needs no address — the recipient comes to us. Both
               other modes need somewhere to go, so the field follows the card's
               selected state rather than the upgrade switch.
             */}
-            {form.dropoffMode !== 'hub' && (
-              <Field
-                label={form.dropoffMode === 'doorstep' ? 'Dropoff address' : 'Meeting point'}
-                icon={(color, size) => <Navigation color={color} size={size} />}
-                placeholder={
-                  form.dropoffMode === 'doorstep'
-                    ? '45 Allen Avenue'
-                    : 'Total filling station, Allen Avenue'
-                }
-                value={form.dropoffAddress}
-                onChangeText={(text) => setField('dropoffAddress', text)}
-                error={errors.dropoffAddress}
-                multiline
-              />
-            )}
+                {form.dropoffMode !== 'hub' && (
+                  <Field
+                    label={form.dropoffMode === 'doorstep' ? 'Dropoff address' : 'Meeting point'}
+                    icon={(color, size) => <Navigation color={color} size={size} />}
+                    placeholder={
+                      form.dropoffMode === 'doorstep'
+                        ? '45 Allen Avenue'
+                        : 'Total filling station, Allen Avenue'
+                    }
+                    value={form.dropoffAddress}
+                    onChangeText={(text) => setField('dropoffAddress', text)}
+                    error={errors.dropoffAddress}
+                    multiline
+                  />
+                )}
 
-            <Field
-              label="Recipient name"
-              icon={(color, size) => <UserRound color={color} size={size} />}
-              placeholder="Ada Obi"
-              value={form.recipientName}
-              onChangeText={(text) => setField('recipientName', text)}
-              error={errors.recipientName}
-              autoCapitalize="words"
-            />
+                <Field
+                  label="Recipient name"
+                  icon={(color, size) => <UserRound color={color} size={size} />}
+                  placeholder="Ada Obi"
+                  value={form.recipientName}
+                  onChangeText={(text) => setField('recipientName', text)}
+                  error={errors.recipientName}
+                  autoCapitalize="words"
+                />
 
-            <ValidatedPhoneInput
-              label="Recipient phone"
-              value={form.recipientPhone}
-              onChangeText={(text) => setField('recipientPhone', text)}
-              showError={Boolean(errors.recipientPhone)}
-            />
+                <ValidatedPhoneInput
+                  label="Recipient phone"
+                  value={form.recipientPhone}
+                  onChangeText={(text) => setField('recipientPhone', text)}
+                  showError={Boolean(errors.recipientPhone)}
+                />
 
-            <Field
-              label="Delivery notes (optional)"
-              icon={(color, size) => <StickyNote color={color} size={size} />}
-              placeholder="Call on arrival, leave with security..."
-              value={form.notes}
-              onChangeText={(text) => setField('notes', text)}
-              multiline
-            />
-          </Card>
+                <Field
+                  label="Delivery notes (optional)"
+                  icon={(color, size) => <StickyNote color={color} size={size} />}
+                  placeholder="Call on arrival, leave with security..."
+                  value={form.notes}
+                  onChangeText={(text) => setField('notes', text)}
+                  multiline
+                />
+              </Card>
+              {/* 4 — Summary & cost estimate */}
+              <Card style={[styles.card, styles.summaryCard, { borderColor: theme.primary }]}>
+                <View style={styles.summaryHeader}>
+                  <SectionHeading
+                    icon={<Receipt color={theme.primary} size={18} />}
+                    title="Delivery summary"
+                  />
+                  <Badge
+                    label={isLocal ? 'Local' : 'Inter-State'}
+                    tone={isLocal ? 'success' : 'primary'}
+                  />
+                </View>
 
-          {/* 4 — Summary & cost estimate */}
-          <Card style={[styles.card, styles.summaryCard, { borderColor: theme.primary }]}>
-            <View style={styles.summaryHeader}>
-              <SectionHeading
-                icon={<Receipt color={theme.primary} size={18} />}
-                title="Delivery summary"
-              />
-              <Badge
-                label={isLocal ? 'Local' : 'Inter-State'}
-                tone={isLocal ? 'success' : 'primary'}
-              />
-            </View>
+                <View style={styles.summaryRouteRow}>
+                  <Text style={[styles.summaryRoute, { color: theme.text }]} numberOfLines={2}>
+                    {originLocation}
+                  </Text>
+                  <ArrowRight color={theme.primary} size={16} />
+                  <Text style={[styles.summaryRoute, { color: theme.text }]} numberOfLines={2}>
+                    {destinationLocation}
+                  </Text>
+                </View>
 
-            <View style={styles.summaryRouteRow}>
-              <Text style={[styles.summaryRoute, { color: theme.text }]} numberOfLines={2}>
-                {originLocation}
-              </Text>
-              <ArrowRight color={theme.primary} size={16} />
-              <Text style={[styles.summaryRoute, { color: theme.text }]} numberOfLines={2}>
-                {destinationLocation}
-              </Text>
-            </View>
+                <View style={[styles.divider, { backgroundColor: theme.border }]} />
 
-            <View style={[styles.divider, { backgroundColor: theme.border }]} />
-
-            {/*
+                {/*
               A full read-back of the form, so the last thing before Confirm
               shows everything that's about to be posted rather than just the
               route and the price. Rows that have nothing to say are omitted —
               an empty "Notes: —" is noise, not reassurance.
             */}
-            <ReviewRow
-              icon={<PackageOpen color={theme.textMuted} size={14} />}
-              label="Item"
-              value={
-                [
-                  form.itemDescription.trim() || 'Not named yet',
-                  form.category,
-                  form.weight.trim() ? `${form.weight.trim()} kg` : null,
-                ]
-                  .filter(Boolean)
-                  .join(' · ') + (form.fragile ? ' · Fragile' : '')
-              }
-            />
-            <ReviewRow
-              icon={<Banknote color={theme.textMuted} size={14} />}
-              label="Declared"
-              value={
-                form.declaredValue.trim()
-                  ? `${formatNaira(parseAmountInput(form.declaredValue))} — insured`
-                  : 'Not declared — travels uninsured'
-              }
-            />
-            <ReviewRow
-              icon={<Tag color={theme.textMuted} size={14} />}
-              label="Photo"
-              value={form.itemPhotoUri ? 'Attached' : 'Not attached yet'}
-            />
+                <ReviewRow
+                  icon={<PackageOpen color={theme.textMuted} size={14} />}
+                  label="Item"
+                  value={
+                    [
+                      form.itemDescription.trim() || 'Not named yet',
+                      form.category,
+                      form.weight.trim() ? `${form.weight.trim()} kg` : null,
+                    ]
+                      .filter(Boolean)
+                      .join(' · ') + (form.fragile ? ' · Fragile' : '')
+                  }
+                />
+                <ReviewRow
+                  icon={<Banknote color={theme.textMuted} size={14} />}
+                  label="Declared"
+                  value={
+                    form.declaredValue.trim()
+                      ? `${formatNaira(parseAmountInput(form.declaredValue))} — insured`
+                      : 'Not declared — travels uninsured'
+                  }
+                />
+                <ReviewRow
+                  icon={<Tag color={theme.textMuted} size={14} />}
+                  label="Photo"
+                  value={form.itemPhotoUri ? 'Attached' : 'Not attached yet'}
+                />
 
-            <View style={[styles.divider, { backgroundColor: theme.border }]} />
+                <View style={[styles.divider, { backgroundColor: theme.border }]} />
 
-            <ReviewRow
-              icon={<MapPin color={theme.textMuted} size={14} />}
-              label="Pickup"
-              value={pickupSummary}
-            />
-            {!!form.pickupContactName.trim() && (
-              <ReviewRow
-                icon={<UserRound color={theme.textMuted} size={14} />}
-                label={form.pickupMode === 'hub' ? 'Dropping off' : 'Contact'}
-                value={
-                  form.pickupContactName.trim() +
-                  (form.senderPhone.trim() ? ` · ${form.senderPhone.trim()}` : '')
-                }
-              />
-            )}
-            <ReviewRow
-              icon={<Navigation color={theme.textMuted} size={14} />}
-              label="Dropoff"
-              value={dropoffSummary}
-            />
-            {!!form.recipientName.trim() && (
-              <ReviewRow
-                icon={<UserRound color={theme.textMuted} size={14} />}
-                label="Recipient"
-                value={
-                  form.recipientName.trim() +
-                  (form.recipientPhone.trim() ? ` · ${form.recipientPhone.trim()}` : '')
-                }
-              />
-            )}
-            {!!form.notes.trim() && (
-              <ReviewRow
-                icon={<StickyNote color={theme.textMuted} size={14} />}
-                label="Notes"
-                value={form.notes.trim()}
-              />
-            )}
+                <ReviewRow
+                  icon={<MapPin color={theme.textMuted} size={14} />}
+                  label="Pickup"
+                  value={pickupSummary}
+                />
+                {!!form.pickupContactName.trim() && (
+                  <ReviewRow
+                    icon={<UserRound color={theme.textMuted} size={14} />}
+                    label={form.pickupMode === 'hub' ? 'Dropping off' : 'Contact'}
+                    value={
+                      form.pickupContactName.trim() +
+                      (form.senderPhone.trim() ? ` · ${form.senderPhone.trim()}` : '')
+                    }
+                  />
+                )}
+                <ReviewRow
+                  icon={<Navigation color={theme.textMuted} size={14} />}
+                  label="Dropoff"
+                  value={dropoffSummary}
+                />
+                {!!form.recipientName.trim() && (
+                  <ReviewRow
+                    icon={<UserRound color={theme.textMuted} size={14} />}
+                    label="Recipient"
+                    value={
+                      form.recipientName.trim() +
+                      (form.recipientPhone.trim() ? ` · ${form.recipientPhone.trim()}` : '')
+                    }
+                  />
+                )}
+                {!!form.notes.trim() && (
+                  <ReviewRow
+                    icon={<StickyNote color={theme.textMuted} size={14} />}
+                    label="Notes"
+                    value={form.notes.trim()}
+                  />
+                )}
 
-            <View style={[styles.divider, { backgroundColor: theme.border }]} />
+                <View style={[styles.divider, { backgroundColor: theme.border }]} />
 
-            <CostRow label={`Base fare · ${isLocal ? 'Local' : 'Inter-State'}`} value={fee.base} />
-            <CostRow
-              label={`Weight · ${form.weight.trim() || 0} kg × ${formatNaira(PRICING.perKg[form.deliveryType])}`}
-              value={fee.weight}
-            />
-            {fee.insurance > 0 && (
-              <CostRow label="Insurance · 1% of declared value" value={fee.insurance} />
-            )}
-            {/*
+                <CostRow
+                  label={`Base fare · ${isLocal ? 'Local' : 'Inter-State'}`}
+                  value={fee.base}
+                />
+                <CostRow
+                  label={`Weight · ${form.weight.trim() || 0} kg × ${formatNaira(PRICING.perKg[form.deliveryType])}`}
+                  value={fee.weight}
+                />
+                {fee.insurance > 0 && (
+                  <CostRow label="Insurance · 1% of declared value" value={fee.insurance} />
+                )}
+                {/*
               Absent entirely when neither leg is chargeable — a public-location
               pickup met at a hub, which is now the cheapest route through this
               form and the one the pricing is meant to steer people towards.
             */}
-            {fee.handover > 0 && (
-              <CostRow
-                label={handoverFeeLabel(form.pickupMode, form.dropoffMode)}
-                value={fee.handover}
+                {fee.handover > 0 && (
+                  <CostRow
+                    label={handoverFeeLabel(form.pickupMode, form.dropoffMode)}
+                    value={fee.handover}
+                  />
+                )}
+
+                <View style={[styles.divider, { backgroundColor: theme.border }]} />
+
+                <View style={styles.totalRow}>
+                  <Text style={[styles.totalLabel, { color: theme.text }]}>Estimated total</Text>
+                  <Text style={[styles.totalValue, { color: theme.primary }]}>
+                    {formatNaira(fee.total)}
+                  </Text>
+                </View>
+                <Text style={[styles.disclaimer, { color: theme.textMuted }]}>
+                  Estimate only. Final fare is confirmed when a driver accepts.
+                </Text>
+              </Card>
+
+              {/*
+                The confirmation, between the summary and the button.
+
+                Deliberately after the live estimate rather than before it: the
+                summary is the last thing worth reading, and a checkbox above it
+                would be ticked before the number it is confirming had been
+                seen.
+              */}
+              <ConfirmCheckbox
+                checked={confirmed}
+                onChange={setConfirmed}
+                label="I confirm that all provided parcel details, sender identification, and delivery information are accurate."
               />
-            )}
+            </>
+          )}
 
-            <View style={[styles.divider, { backgroundColor: theme.border }]} />
+          {/*
+            ⚠ Post parcel is gated by the checkbox alone.
 
-            <View style={styles.totalRow}>
-              <Text style={[styles.totalLabel, { color: theme.text }]}>Estimated total</Text>
-              <Text style={[styles.totalValue, { color: theme.primary }]}>
-                {formatNaira(fee.total)}
-              </Text>
-            </View>
-            <Text style={[styles.disclaimer, { color: theme.textMuted }]}>
-              Estimate only. Final fare is confirmed when a driver accepts.
-            </Text>
-          </Card>
-
-          {/* 5 — Action */}
-          <Button
-            label="Confirm & Post Parcel"
-            icon={(color, size) => <PackagePlus color={color} size={size} />}
-            onPress={handleSubmit}
+              Not by validation: a dead button on a three-page form tells
+              somebody nothing about which of twenty fields is wrong, and they
+              cannot even see most of them from here. `handleSubmit` runs the
+              whole check and sends them to the step that has the problem.
+          */}
+          <WizardNav
+            onBack={step > 0 ? goBack : undefined}
+            onNext={goNext}
+            finalAction={
+              step === STEPS.length - 1 ? (
+                <Button
+                  label="Confirm & Post Parcel"
+                  icon={(color, size) => <PackagePlus color={color} size={size} />}
+                  onPress={handleSubmit}
+                  disabled={!confirmed}
+                />
+              ) : undefined
+            }
           />
         </View>
       </ScrollView>
@@ -1421,6 +1635,11 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     borderBottomWidth: StyleSheet.hairlineWidth,
     zIndex: 2,
+  },
+  /** 17px semi-bold, against `screenTitle`'s 28px extra-bold. */
+  pinnedTitle: {
+    ...Typography.sectionTitle,
+    marginBottom: Spacing.two,
   },
   pinnedInner: {
     width: '100%',
