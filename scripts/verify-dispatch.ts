@@ -545,8 +545,13 @@ check(
 check(
   'and idle tells the driver what to do rather than that nothing matched',
   matchStatus({ liveOffers: 0, activeJobs: 0, openJourneys: 0 }).kind === 'idle' &&
-    /schedule a journey/i.test(matchStatusLabel({ kind: 'idle' })),
+    /setup trip/i.test(matchStatusLabel({ kind: 'idle' })),
   '"no matches" implies waiting will help; there is nothing to match against',
+);
+check(
+  'and names the control that does it',
+  /setup trip/i.test(matchStatusLabel({ kind: 'idle' })),
+  'this hint used to say "schedule a journey" while the button said something else — an instruction that names nothing on screen is not an instruction',
 );
 
 const application = (status: DriverApplication['status']) => ({ status }) as DriverApplication;
@@ -1253,7 +1258,7 @@ check(
 check(
   'every manual assignment is logged as a warning against the admin',
   flat(onlyCode).includes("'warning', 'dispatch', 'admin assigned a parcel by hand'"),
-  "a run of these is a dispatch bug, not an admin habit — info level would bury that. " +
+  'a run of these is a dispatch bug, not an admin habit — info level would bury that. ' +
     "'warn' is not in the app_events vocabulary: it is info | warning | error, and the " +
     'constraint refuses anything else at runtime',
 );

@@ -11,6 +11,7 @@ import {
   View,
 } from 'react-native';
 
+import { Footer } from '@/components/Footer';
 import { StickyHeaderScreen } from '@/components/ui/sticky-header';
 import { Elevation, PageCanvas, Radius, Spacing, Typography, font } from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';
@@ -103,6 +104,7 @@ export function AuthShell({ title, subtitle, children, footer, onBack }: AuthShe
 
             {!!footer && <View style={styles.footer}>{footer}</View>}
           </View>
+          <Footer />
         </ScrollView>
       </KeyboardAvoidingView>
     </StickyHeaderScreen>

@@ -19,6 +19,7 @@ import {
   View,
 } from 'react-native';
 
+import { Footer } from '@/components/Footer';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
@@ -176,6 +177,7 @@ export default function RateCalculatorScreen() {
             }}
           />
         </View>
+        <Footer />
       </ScrollView>
     </KeyboardAvoidingView>
   );

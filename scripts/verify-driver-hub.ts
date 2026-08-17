@@ -40,10 +40,18 @@ const ROOT = process.cwd();
  */
 const navSource = readFileSync(join(ROOT, 'src/components/ui/app-nav-bar.tsx'), 'utf8');
 
+/*
+ * The four entries under "Driver", and only four.
+ *
+ * Trip Setup and Assigned Trip used to be here. They moved into the Driver
+ * Dashboard: both are things a driver does while working, and a public menu
+ * advertising a job board a visitor cannot use is a menu that mostly leads to
+ * refusals. The reachability check below is what makes that safe.
+ */
 const DROPDOWN_ROUTES: Record<string, string> = {
-  'Schedule My Journey': 'available-packages',
-  'Assigned Trip / Dashboard': 'driver',
-  'Be a Driver / Updates': 'driver-updates',
+  'Be a Driver / Update': 'driver-updates',
+  'Driver Dashboard': 'driver',
+  'Driver Wallet / Payouts': 'driver-wallet',
   'Driver Guidelines & FAQs': 'driver-guidelines',
 };
 
@@ -60,12 +68,79 @@ for (const [label, route] of Object.entries(DROPDOWN_ROUTES)) {
 }
 
 check(
-  'the merged label replaced both old entries',
-  navSource.includes("label: 'Jobs & Drivers'") &&
+  'the group is called Driver, with no leftover from its earlier names',
+  navSource.includes("label: 'Driver',") &&
+    !navSource.includes("label: 'Jobs & Drivers'") &&
     !navSource.includes("label: 'Drivers'") &&
     !navSource.includes("label: 'Find Jobs'"),
-  'a leftover Drivers or Find Jobs entry would put the same page in the nav twice',
+  'a leftover entry would put the same page in the nav twice',
 );
+
+/*
+ * ⚠ The two routes that left the menu must still have a way in.
+ *
+ *   This is the orphan-route failure `verify-navigation` exists for, arriving
+ *   from a new direction: a screen that is allowed, routable, and reachable from
+ *   nothing. On web the Driver Dashboard is now the only door to Trip Setup, so
+ *   the link on that page is load-bearing rather than convenient.
+ */
+const driverScreen = readFileSync(join(ROOT, 'src/app/(tabs)/driver.tsx'), 'utf8');
+
+check(
+  'Trip Setup left the menu and is reachable from the dashboard',
+  !navSource.includes("label: 'Schedule My Journey'") &&
+    !navSource.includes("href: '/available-packages'") &&
+    driverScreen.includes("router.navigate('/available-packages')"),
+  'without the dashboard link, /available-packages would be reachable on web from nothing at all',
+);
+/*
+ * ⚠ One name, checked in every place a driver can read it.
+ *
+ *   This destination has now been called three things: Schedule My Journey,
+ *   then Trip Setup, now Setup Trip. Each rename has left a straggler — the
+ *   last one shipped a dashboard button reading "Setup Trip" that landed on a
+ *   page headed "Trip Setup", beside a tab labelled "Trip Setup". A person
+ *   cannot tell whether those are one feature or three.
+ *
+ *   So the assertion is not "the new name appears somewhere". It is that the
+ *   old names appear nowhere a driver looks, and the new one appears in all
+ *   four: the button, the tab, the screen's own heading, and the navigator's
+ *   title for the route.
+ */
+const NAMED_SURFACES = [
+  'src/app/(tabs)/driver.tsx',
+  'src/components/ui/bottom-tab-bar.tsx',
+  'src/app/(tabs)/available-packages.tsx',
+  'src/app/(tabs)/_layout.tsx',
+] as const;
+
+/*
+ * Comments stripped before the old-name check.
+ *
+ * These files explain the renames they went through, so matching the raw source
+ * finds "Schedule a journey" inside the note about why there is no longer a
+ * button called that — the assertion would fail on its own documentation. The
+ * same trap the `description` check below fell into.
+ */
+const withoutComments = (source: string) =>
+  source
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/\{\s*\/\*[\s\S]*?\*\/\s*\}/g, '')
+    .replace(/^\s*\/\/.*$/gm, '');
+
+for (const path of NAMED_SURFACES) {
+  const surface = withoutComments(readFileSync(join(ROOT, path), 'utf8'));
+  check(
+    `${path.split('/').pop()} calls it Setup Trip`,
+    /Setup Trip/.test(surface),
+    'a button, a tab and a page heading that disagree read as three different features',
+  );
+  check(
+    `${path.split('/').pop()} carries no earlier name`,
+    !/Trip Setup|Schedule My Journey|Schedule a journey/.test(surface),
+    'every rename so far has left one behind',
+  );
+}
 
 /*
  * ---------- the dropdown is a list, not a rich menu ----------

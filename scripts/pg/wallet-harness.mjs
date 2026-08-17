@@ -127,7 +127,9 @@ for (const fn of [
 
 await db.exec(extractTable(wallet, 'public.driver_earnings'));
 await db.exec(extractTable(wallet, 'public.payout_requests'));
-await db.exec(extractStatement(wallet, 'create unique index if not exists payout_requests_one_open'));
+await db.exec(
+  extractStatement(wallet, 'create unique index if not exists payout_requests_one_open'),
+);
 
 for (const fn of [
   'create or replace function public.record_delivery_earning(',
@@ -191,7 +193,10 @@ await run('scenario 1 — a delivery becomes an earning', async () => {
   await deliver(10000);
 
   const earning = (await q('select * from public.driver_earnings'))[0];
-  check('one row per delivered parcel', (await q('select * from public.driver_earnings')).length === 1);
+  check(
+    'one row per delivered parcel',
+    (await q('select * from public.driver_earnings')).length === 1,
+  );
   check('the gross is the quoted fare', money(earning.gross) === 10000);
   check('commission is taken at the configured rate', money(earning.commission) === 1500);
   check('and the driver nets the rest', money(earning.net) === 8500);
@@ -206,7 +211,10 @@ await run('scenario 2 — changing the rate does not rewrite history', async () 
   await setSetting('commission_rate', '0.40');
   const earning = (await q('select * from public.driver_earnings'))[0];
 
-  check('the old earning is untouched', money(earning.net) === 8500 && money(earning.commission_rate) === 0.15);
+  check(
+    'the old earning is untouched',
+    money(earning.net) === 8500 && money(earning.commission_rate) === 0.15,
+  );
 
   await deliver(10000);
   const rows = await q('select * from public.driver_earnings order by earned_at');
@@ -345,7 +353,10 @@ await run('scenario 10 — only an admin settles, and only once', async () => {
   await q('select public.settle_payout($1, $2, $3)', [request.id, 'paid', 'NIBSS-123']);
 
   const settled = (await q('select * from public.payout_requests where id = $1', [request.id]))[0];
-  check('it is paid with a reference', settled.status === 'paid' && settled.reference === 'NIBSS-123');
+  check(
+    'it is paid with a reference',
+    settled.status === 'paid' && settled.reference === 'NIBSS-123',
+  );
   check('and settled_at is set', settled.settled_at !== null);
 
   let again = '';
@@ -397,7 +408,10 @@ await run('scenario 13 — the feed merges both sides', async () => {
 
   const feed = await q('select * from public.my_wallet_activity()');
   check('both rows appear', feed.length === 2);
-  check('the earning is positive', feed.some((r) => r.kind === 'earning' && money(r.amount) === 7000));
+  check(
+    'the earning is positive',
+    feed.some((r) => r.kind === 'earning' && money(r.amount) === 7000),
+  );
   check(
     'and the payout is negative',
     feed.some((r) => r.kind === 'payout' && money(r.amount) === -7000),

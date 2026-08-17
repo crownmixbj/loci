@@ -203,13 +203,9 @@ await db.exec(`
     before insert or update on public.driver_journeys
     for each row execute function public.journey_departure_sync();
 `);
-await db.exec(
-  extractStatement(departureSql, 'drop function if exists public.journey_matches('),
-);
+await db.exec(extractStatement(departureSql, 'drop function if exists public.journey_matches('));
 await db.exec(extractFunction(departureSql, 'create or replace function public.journey_matches('));
-await db.exec(
-  extractFunction(departureSql, 'create or replace function public.dispatch_booking('),
-);
+await db.exec(extractFunction(departureSql, 'create or replace function public.dispatch_booking('));
 
 /*
  * 27 needs `auth.uid()`, which PGlite has no notion of. A stub in an `auth`
@@ -337,7 +333,7 @@ await run('scenario 1 — a first offer', async () => {
 
 // --- 2. a decline holds that driver off for 15 minutes -----------------------
 
-await run("scenario 2 \u2014 a decline cools down for fifteen minutes", async () => {
+await run('scenario 2 \u2014 a decline cools down for fifteen minutes', async () => {
   await db.exec('delete from public.dispatch_offers; delete from public.bookings;');
   await db.exec('delete from public.driver_journeys');
   const parcel = await newParcel();
@@ -372,7 +368,7 @@ await run("scenario 2 \u2014 a decline cools down for fifteen minutes", async ()
 
 // --- 3. the parcel keeps rotating while one driver cools off -----------------
 
-await run("scenario 3 \u2014 the parcel rotates onward immediately", async () => {
+await run('scenario 3 \u2014 the parcel rotates onward immediately', async () => {
   await db.exec('delete from public.dispatch_offers; delete from public.bookings;');
   await db.exec('delete from public.driver_journeys');
   const parcel = await newParcel();
@@ -394,7 +390,7 @@ await run("scenario 3 \u2014 the parcel rotates onward immediately", async () =>
 
 // --- 4. the cooling driver still gets other parcels --------------------------
 
-await run("scenario 4 \u2014 the cooling driver keeps other work", async () => {
+await run('scenario 4 \u2014 the cooling driver keeps other work', async () => {
   await db.exec('delete from public.dispatch_offers; delete from public.bookings;');
   await db.exec('delete from public.driver_journeys');
   const first = await newParcel();
@@ -416,7 +412,7 @@ await run("scenario 4 \u2014 the cooling driver keeps other work", async () => {
 
 // --- 5. a lapse counts from when it lapsed, not when it was swept ------------
 
-await run("scenario 5 \u2014 a late sweep does not extend the cooldown", async () => {
+await run('scenario 5 \u2014 a late sweep does not extend the cooldown', async () => {
   await db.exec('delete from public.dispatch_offers; delete from public.bookings;');
   await db.exec('delete from public.driver_journeys');
   const parcel = await newParcel();
@@ -437,7 +433,7 @@ await run("scenario 5 \u2014 a late sweep does not extend the cooldown", async (
 
 // --- 6. a fresh lapse does cool down ----------------------------------------
 
-await run("scenario 6 \u2014 a fresh lapse does cool down", async () => {
+await run('scenario 6 \u2014 a fresh lapse does cool down', async () => {
   await db.exec('delete from public.dispatch_offers; delete from public.bookings;');
   await db.exec('delete from public.driver_journeys');
   const parcel = await newParcel();
@@ -455,7 +451,7 @@ await run("scenario 6 \u2014 a fresh lapse does cool down", async () => {
 
 // --- 7. the invariant that must never break ---------------------------------
 
-await run("scenario 7 \u2014 never two live offers", async () => {
+await run('scenario 7 \u2014 never two live offers', async () => {
   await db.exec('delete from public.dispatch_offers; delete from public.bookings;');
   await db.exec('delete from public.driver_journeys');
   const parcel = await newParcel();
@@ -479,7 +475,7 @@ await run("scenario 7 \u2014 never two live offers", async () => {
 
 // --- 8. interstate parcels are not handed to flash shifts -------------------
 
-await run("scenario 8 \u2014 flash shifts take no interstate parcel", async () => {
+await run('scenario 8 \u2014 flash shifts take no interstate parcel', async () => {
   await db.exec('delete from public.dispatch_offers; delete from public.bookings;');
   await db.exec('delete from public.driver_journeys');
   const parcel = await newParcel('Ibadan', 'Lagos');
@@ -520,10 +516,7 @@ await run('scenario 10 — no journey at all means no offer', async () => {
   );
 
   await declareRoute(A, 'Ibadan', 'Lagos');
-  check(
-    'and receives it the moment they declare the route',
-    (await dispatch(interstate)) !== null,
-  );
+  check('and receives it the moment they declare the route', (await dispatch(interstate)) !== null);
 });
 
 await run('scenario 11 — the window follows the parcel, not the driver', async () => {
@@ -592,9 +585,11 @@ await run('scenario 13 — a route whose window has passed stops receiving', asy
   );
   check(
     'and the window was squared with the departure rather than left behind',
-    (await q('select departs_before, departure_time from public.driver_journeys where id = $1', [
-      journey,
-    ]))[0].departs_before.getTime() ===
+    (
+      await q('select departs_before, departure_time from public.driver_journeys where id = $1', [
+        journey,
+      ])
+    )[0].departs_before.getTime() ===
       (
         await q('select departure_time from public.driver_journeys where id = $1', [journey])
       )[0].departure_time.getTime(),
@@ -617,8 +612,7 @@ await run('scenario 14 — the departure is the only thing that ends listening',
 
   check(
     'the client sends a departure and the database derives the window',
-    row.departure_time !== null &&
-      row.departs_before.getTime() === row.departure_time.getTime(),
+    row.departure_time !== null && row.departs_before.getTime() === row.departure_time.getTime(),
     'the insert deliberately set departs_before to a minute from now; the trigger replaced it',
   );
   check('a route departing later today is live', (await dispatch(parcel)) !== null);
@@ -729,7 +723,7 @@ await run('scenario 18 — cancelling frees the parcel immediately', async () =>
   );
 });
 
-await run('scenario 19 — cancelling somebody else\'s route is refused', async () => {
+await run("scenario 19 — cancelling somebody else's route is refused", async () => {
   await db.exec('delete from public.dispatch_offers; delete from public.bookings;');
   await db.exec('delete from public.driver_journeys');
   await signIn(A);
@@ -770,10 +764,9 @@ await run('scenario 21 — editing changes the terms', async () => {
   await signIn(A);
   const mine = await declareRoute(A, 'Ibadan', 'Lagos', 6);
 
-  await q(
-    "select public.update_journey($1, null, 'Abuja', 55, now() + interval '9 hours')",
-    [mine],
-  );
+  await q("select public.update_journey($1, null, 'Abuja', 55, now() + interval '9 hours')", [
+    mine,
+  ]);
 
   const row = (
     await q(
@@ -814,9 +807,8 @@ await run('scenario 22 — editing is refused while an offer is live', async () 
   );
   check(
     'and the route is untouched',
-    (
-      await q('select destination_city from public.driver_journeys where id = $1', [mine])
-    )[0].destination_city === 'Lagos',
+    (await q('select destination_city from public.driver_journeys where id = $1', [mine]))[0]
+      .destination_city === 'Lagos',
   );
 });
 

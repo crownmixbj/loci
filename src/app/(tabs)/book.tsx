@@ -26,6 +26,7 @@ import {
   View,
 } from 'react-native';
 
+import { Footer } from '@/components/Footer';
 import { showDialog } from '@/components/ui/dialog';
 import { useAuthGate } from '@/hooks/use-auth-gate';
 import { useFormDraft } from '@/hooks/use-form-draft';
@@ -44,7 +45,7 @@ import {
   type WizardStep,
 } from '@/components/ui/form-wizard';
 import { PhotoPicker } from '@/components/ui/photo-picker';
-import { resolveSenderPhoto, SenderPhotoSheet } from '@/components/ui/sender-photo-sheet';
+import { LiveSelfieCard } from '@/components/ui/live-selfie-card';
 import { SelectableUpgradeCard } from '@/components/ui/selectable-upgrade-card';
 import { ValidatedPhoneInput } from '@/components/ValidatedPhoneInput';
 import { FontSize, MaxContentWidth, Radius, Spacing, Typography, font } from '@/constants/theme';
@@ -57,6 +58,8 @@ import { consumeCaptureSession } from '@/store/capture-session';
 import {
   fetchSenderIdentity,
   ninError,
+  runIdentityCheck,
+  submitOnboarding,
   verificationPath,
   type SenderIdentity,
 } from '@/store/identity';
@@ -466,9 +469,36 @@ export default function BookScreen() {
   }, []);
 
   const scrollRef = useRef<ScrollView>(null);
+  /*
+   * Back to the top on every step change.
+   *
+   * An effect rather than a call inside `goNext`, so Back and the progress
+   * indicator get it too — and so does a failed submit, which jumps to whichever
+   * step has the problem. `animated: false` because this is a page turn, not a
+   * scroll; animating it flies the new step's fields past on the way.
+   *
+   * Reuses the existing `scrollRef`, which already scrolls to the item card
+   * when a photo is rejected.
+   */
+  useEffect(() => {
+    scrollRef.current?.scrollTo({ y: 0, animated: false });
+  }, [step]);
 
-  /** The photo step shown by `handleSubmit`, and whether it is mid-post. */
-  const [photoOpen, setPhotoOpen] = useState(false);
+  /*
+   * The live photo, banked on page three before the parcel is posted.
+   *
+   * ⚠ Not part of the saved draft, and not part of `form`.
+   *
+   *   A capture session is single-use and tied to the account that opened it.
+   *   Restoring one from a draft written yesterday would mean a Post button
+   *   that looked ready and failed at the last statement — `consume_capture_
+   *   session` refuses a session already spent — with nothing on screen
+   *   explaining why. It is re-taken each sitting, which is also the honest
+   *   thing for a photo whose whole claim is that it was taken just now.
+   */
+  const [photoSession, setPhotoSession] = useState<string | null>(null);
+  /** What the identity check said, shown on the card. Never blocks the parcel. */
+  const [identityNote, setIdentityNote] = useState('');
   const [posting, setPosting] = useState(false);
   const declaredValueRef = useRef<TextInput>(null);
   const itemCardY = useRef(0);
@@ -780,12 +810,29 @@ export default function BookScreen() {
     }
 
     /*
+     * ⚠ The photo is checked here as well as by the disabled button.
+     *
+     *   The button is disabled without one, so this looks unreachable — until
+     *   the account signs out between capture and post, or a draft restores
+     *   with the checkbox ticked. A guard that is only in the UI is a guard
+     *   that holds until the first path nobody thought of.
+     */
+    if (!photoSession) {
+      setStep(STEPS.length - 1);
+      showDialog(
+        'Take the live photo first',
+        'Every LOCI parcel carries a photo of the person who posted it. It is the last item on this page.',
+      );
+      return;
+    }
+
+    /*
      * Validate first, then ask for an account. The other order — gate on entry —
      * makes someone sign in before they know whether their parcel is even
      * bookable, and loses everything they typed if they bounce out. Here the
      * form is already complete and the state survives the round trip.
      */
-    requireAuth(() => setPhotoOpen(true), {
+    requireAuth(() => void post(photoSession), {
       title: 'Sign in to post this parcel',
       reason:
         'A parcel needs an owner: it is how you track it, and how the driver knows who to call at pickup. Your details stay filled in.',
@@ -793,41 +840,53 @@ export default function BookScreen() {
     });
   };
 
-  /*
-   * The photo step, between a valid form and a posted parcel.
-   *
-   * Deliberately last. Asking for a photo before someone knows the fare, or
-   * before they know the form even validates, is asking for a face in exchange
-   * for nothing. By this point the parcel is one tap from being posted.
-   *
-   * There is no decline path. The sheet always produces a photo — either a
-   * local image or a capture session the phone completed — and backing out
-   * returns to the form rather than posting without one.
-   */
-  const handlePhotoDone = async (result: { uri: string } | { sessionId: string }) => {
+  const post = async (sessionId: string) => {
     setPosting(true);
     try {
-      /*
-       * Both paths converge on a session id before the parcel is posted, so
-       * `postParcel` has one thing to attach and one failure mode. A browser
-       * camera shot opens its own session here; a phone capture already has
-       * one.
-       */
-      const resolved = await resolveSenderPhoto(result);
-
-      if (!resolved.ok) {
-        showDialog(
-          'The photo did not upload',
-          `${resolved.error} Your details are still here — try again.`,
-        );
-        return;
-      }
-
-      await postParcel(resolved.sessionId);
+      await postParcel(sessionId);
     } finally {
       setPosting(false);
-      setPhotoOpen(false);
     }
+  };
+
+  /*
+   * The photo, taken on page three rather than after the button.
+   *
+   * ⚠ Two paths, because the sender may not have been checked before.
+   *
+   *   First parcel: the NIN and the slip from page two go up with the selfie,
+   *   and a match promotes this photo to the account's master reference.
+   *   Afterwards: the selfie alone, compared against that reference.
+   *
+   *   Neither outcome stops the parcel. A mismatch is recorded for a person to
+   *   look at — a sender whose NIMC photo is eight years old has done nothing
+   *   wrong, and a form that refused them would be wrong far more often than
+   *   they are.
+   */
+  const handlePhotoCaptured = async (sessionId: string) => {
+    /*
+     * ⚠ The session is banked whatever the identity check says.
+     *
+     *   The parcel's requirement is the photograph, and it exists — it is
+     *   uploaded and it has passed liveness. The NIN match is an account-level
+     *   record that nothing in this form depends on, and the rule everywhere
+     *   else in LOCI is that it never blocks a shipment. Withholding the
+     *   session on a failed slip upload would turn "we could not reach the
+     *   provider" into "you cannot send a parcel".
+     */
+    setPhotoSession(sessionId);
+
+    const outcome =
+      identityPath === 'onboarding'
+        ? await submitOnboarding({ nin, slipUri, sessionId })
+        : await runIdentityCheck(sessionId);
+
+    if (!outcome.ok) {
+      setIdentityNote('Your NIN details could not be saved. Your parcel is not held up.');
+      return;
+    }
+
+    setIdentityNote(outcome.message);
   };
 
   /** Runs only once we know who is posting. */
@@ -1516,6 +1575,34 @@ export default function BookScreen() {
               </Card>
 
               {/*
+                The live photo, as an item on the page.
+
+                Above the confirmation on purpose: the checkbox says the sender
+                identification is accurate, and it cannot honestly be ticked
+                before the photograph that identification rests on has been
+                taken.
+              */}
+              <LiveSelfieCard
+                purpose="sender"
+                captured={photoSession}
+                note={identityNote}
+                onCaptured={handlePhotoCaptured}
+                onCleared={() => {
+                  setPhotoSession(null);
+                  setIdentityNote('');
+                }}
+                disabled={posting}
+                gate={(proceed) =>
+                  requireAuth(proceed, {
+                    title: 'Sign in to take your photo',
+                    reason:
+                      'The photo is stored against your account, so we need to know whose it is. Your details stay filled in.',
+                    next: '/book',
+                  })
+                }
+              />
+
+              {/*
                 The confirmation, between the summary and the button.
 
                 Deliberately after the live estimate rather than before it: the
@@ -1532,12 +1619,17 @@ export default function BookScreen() {
           )}
 
           {/*
-            ⚠ Post parcel is gated by the checkbox alone.
+            ⚠ Post parcel is gated by the checkbox and the photo, and by
+              nothing else.
 
               Not by validation: a dead button on a three-page form tells
               somebody nothing about which of twenty fields is wrong, and they
               cannot even see most of them from here. `handleSubmit` runs the
               whole check and sends them to the step that has the problem.
+
+              The photo is different — it is on *this* page, a foot above the
+              button, with its own state visible. A disabled button there points
+              at something the sender can see.
           */}
           <WizardNav
             onBack={step > 0 ? goBack : undefined}
@@ -1545,23 +1637,17 @@ export default function BookScreen() {
             finalAction={
               step === STEPS.length - 1 ? (
                 <Button
-                  label="Confirm & Post Parcel"
+                  label={posting ? 'Posting…' : 'Confirm & Post Parcel'}
                   icon={(color, size) => <PackagePlus color={color} size={size} />}
                   onPress={handleSubmit}
-                  disabled={!confirmed}
+                  disabled={!confirmed || !photoSession || posting}
                 />
               ) : undefined
             }
           />
         </View>
+        <Footer />
       </ScrollView>
-
-      <SenderPhotoSheet
-        visible={photoOpen}
-        busy={posting}
-        onCancel={() => setPhotoOpen(false)}
-        onDone={handlePhotoDone}
-      />
     </KeyboardAvoidingView>
   );
 }

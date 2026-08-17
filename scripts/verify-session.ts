@@ -135,6 +135,114 @@ check(
   '`user` gets a new identity hourly; keying on it would flash a spinner mid-read',
 );
 
+// -------------------------------- the load that never ran when signed out ---
+
+/*
+ * The bug: Be a Driver / Updates spun forever for anyone not signed in.
+ *
+ * That screen waits for `driverStatusLoaded` before it can choose between the
+ * application form and the timeline. The flag is set by `refreshDriverStatus`,
+ * which an effect calls whenever the person changes — guarded by a ref so an
+ * hourly token refresh does not re-run it. The ref started at `null`. So did
+ * the id of a signed-out visitor. First render, the guard compared them, found
+ * them equal, and returned; the load never happened and never got a second
+ * chance, because `getSession()` resolving to no session sets the same `null`
+ * React bails out on.
+ *
+ * Signed-in people never saw it — a real id is a string, which differs from
+ * null. The one page that exists for people who have not applied was the one
+ * page they could not open.
+ *
+ * Transcribed rather than imported, like the greeter above: this lives inside a
+ * provider's effect and cannot be called from node. The transcription is
+ * checked against the real file below.
+ */
+function makeLoader(initial: string | null | undefined) {
+  let loadedFor = initial;
+  let loads = 0;
+
+  /** One run of the effect, for a given signed-in id. */
+  return (id: string | null): number => {
+    if (loadedFor === id) return loads;
+    loadedFor = id;
+    loads += 1;
+    return loads;
+  };
+}
+
+const signedOut = makeLoader(undefined);
+check(
+  'a signed-out visitor triggers the lookup',
+  signedOut(null) === 1,
+  'without it driverStatusLoaded stays false and Be a Driver spins forever',
+);
+check(
+  'and a second render does not repeat it',
+  signedOut(null) === 1,
+  'the guard still has to stop an hourly token refresh re-running the load',
+);
+
+const signingIn = makeLoader(undefined);
+signingIn(null);
+check('signing in triggers it again', signingIn('user-1') === 2);
+check('and staying signed in does not', signingIn('user-1') === 2);
+check('but a different account does', signingIn('user-2') === 3);
+check(
+  'and signing out does too',
+  signingIn(null) === 4,
+  'the previous person’s application must not be left on screen',
+);
+
+/*
+ * The same simulation with the old starting value, to show it is the sentinel
+ * doing the work and not the shape of the function.
+ */
+check(
+  'starting at null is what broke it',
+  makeLoader(null)(null) === 0,
+  'this is the assertion that would have failed before the fix',
+);
+
+check(
+  'the ref cannot hold a value an account could have',
+  source.includes('useRef<string | null | undefined>(undefined)'),
+  'null is a real identity here — it means signed out',
+);
+
+/*
+ * ⚠ Named one at a time, not "does the sentinel appear anywhere in the file".
+ *
+ *   The check above stays green with the bug put back, because the *other* ref
+ *   still has the sentinel. It is kept as a cheap tripwire, but these are the
+ *   ones that bind: an assertion satisfied by a line it is not about is not an
+ *   assertion, and this file has been bitten by that shape before.
+ */
+for (const ref of ['loadedForUserId', 'restoredViewFor']) {
+  check(
+    `${ref} starts at a value no account can have`,
+    new RegExp(`const ${ref} = useRef<string \\| null \\| undefined>\\(undefined\\)`).test(source),
+    'starting at null means the first render mistakes "signed out" for "already loaded"',
+  );
+}
+
+/*
+ * And the lookup itself cannot hang.
+ *
+ * Both calls already swallowed rejections, but neither was bounded, so a phone
+ * on one bar produced the same permanent spinner by a different route.
+ */
+check(
+  'the application lookup is time-boxed',
+  /withTimeout\(fetchMyApplication\(user\.id\), STATUS_TIMEOUT_MS\)/.test(source) &&
+    /withTimeout\(fetchIsAdmin\(user\.id\), STATUS_TIMEOUT_MS\)/.test(source),
+  'a promise that never settles is a screen that never renders',
+);
+check(
+  'and gives up sooner than a sign-in does',
+  /const STATUS_TIMEOUT_MS = 8_000/.test(source) && /const AUTH_TIMEOUT_MS = 20_000/.test(source),
+  'nobody is watching this one; it runs unprompted at launch',
+);
+
 if (failures > 0) {
   console.error(`\n${failures} assertion(s) failed.`);
   process.exit(1);
@@ -144,5 +252,6 @@ console.log(
   'PASS — the greeting fires once per person: not on tab refocus, token refresh, profile\n' +
     '       update or app launch, but again after a real sign-out and for a different\n' +
     '       account on the same device. driverStatusLoaded resets with the person, not\n' +
-    '       with every token refresh.',
+    '       with every token refresh, the lookup runs for a signed-out visitor as well as a\n' +
+    '       signed-in one, and it cannot hang.',
 );

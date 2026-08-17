@@ -496,9 +496,10 @@ export default function HomeScreen() {
 
         {/*
           Outside `page` so it ignores the horizontal padding and runs
-          edge to edge.
+          edge to edge — which is why it is the one caller that does not need
+          `bleed`. See the prop's note in `Footer.tsx`.
         */}
-        <Footer />
+        <Footer bleed={false} />
       </ScrollView>
     </View>
   );

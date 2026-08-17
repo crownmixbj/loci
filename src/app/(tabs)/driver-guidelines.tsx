@@ -9,6 +9,7 @@ import {
 import { useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
+import { Footer } from '@/components/Footer';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { screenPadding, ScreenHeader, SectionLabel } from '@/components/ui/screen';
@@ -79,7 +80,7 @@ export default function DriverGuidelinesScreen() {
             />
           )}
           <Button
-            label="Schedule a journey"
+            label="Setup Trip"
             variant="secondary"
             icon={(color, size) => <PackageSearch color={color} size={size} />}
             onPress={() => router.navigate('/available-packages')}
@@ -87,6 +88,7 @@ export default function DriverGuidelinesScreen() {
           />
         </View>
       </View>
+      <Footer />
     </ScrollView>
   );
 }

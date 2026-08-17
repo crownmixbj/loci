@@ -228,8 +228,15 @@ export async function submitOnboarding(input: OnboardingInput): Promise<Identity
  *   would reasonably block the shipment on it.
  */
 export async function runIdentityCheck(sessionId: string): Promise<IdentityOutcome> {
+  /*
+   * `subject: 'sender'` is what tells the function to read the NIN from
+   * `sender_identity` and write the verdict back there. Without it the call is
+   * treated as a driver application — which is what happened before the
+   * function knew there were two kinds of subject, and meant every sender check
+   * came back 'unavailable'.
+   */
   const { data, error } = await supabase.functions.invoke('verify-identity', {
-    body: { session_id: sessionId },
+    body: { session_id: sessionId, subject: 'sender' },
   });
 
   /*

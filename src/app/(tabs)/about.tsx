@@ -16,6 +16,7 @@ import {
 } from 'lucide-react-native';
 import { ScrollView, StyleSheet, Text, View } from 'react-native';
 
+import { Footer } from '@/components/Footer';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { screenPadding, SectionLabel } from '@/components/ui/screen';
@@ -161,6 +162,7 @@ export default function AboutScreen() {
           />
         </Card>
       </View>
+      <Footer />
     </ScrollView>
   );
 }

@@ -166,7 +166,8 @@ const seed = async () => {
 const app = async () =>
   (await q('select * from public.driver_applications where user_id = $1', [DRIVER]))[0];
 
-const patch = (obj) => q('select public.update_driver_profile($1) as status', [JSON.stringify(obj)]);
+const patch = (obj) =>
+  q('select public.update_driver_profile($1) as status', [JSON.stringify(obj)]);
 
 const refusal = async (obj) => {
   try {
@@ -195,9 +196,14 @@ await run('scenario 1 — a low-risk edit applies at once', async () => {
   check('both changes are in the history', history.length === 2);
   check(
     'with the value before and after',
-    history.some((h) => h.field === 'vehicle_colour' && h.old_value === 'Red' && h.new_value === 'Blue'),
+    history.some(
+      (h) => h.field === 'vehicle_colour' && h.old_value === 'Red' && h.new_value === 'Blue',
+    ),
   );
-  check('marked low risk and not suspending', history.every((h) => h.risk === 'low' && h.suspended_approval === false));
+  check(
+    'marked low risk and not suspending',
+    history.every((h) => h.risk === 'low' && h.suspended_approval === false),
+  );
 });
 
 await run('scenario 2 — a high-risk edit sends them back for review', async () => {
@@ -225,7 +231,10 @@ await run('scenario 3 — a parcel in their hands blocks a high-risk edit', asyn
     'advance_booking requires is_approved_driver, so suspending mid-delivery strands a parcel the driver cannot mark delivered and a recipient is waiting for',
   );
   check('and nothing changed', (await app()).full_name === 'Omolola Adedapo');
-  check('not even a history row', (await q('select 1 from public.driver_edit_history')).length === 0);
+  check(
+    'not even a history row',
+    (await q('select 1 from public.driver_edit_history')).length === 0,
+  );
 
   // A delivered parcel is not in their hands.
   await db.exec("update public.bookings set status = 'Delivered'");
@@ -334,7 +343,10 @@ await run('scenario 11 — the audit log names fields, never values', async () =
 await run('scenario 12 — an account with no application cannot patch one', async () => {
   await db.exec('delete from public.driver_applications');
   const message = await refusal({ vehicle_colour: 'Blue' });
-  check('it is refused rather than creating one', message !== null && /No driver application/.test(message));
+  check(
+    'it is refused rather than creating one',
+    message !== null && /No driver application/.test(message),
+  );
 });
 
 await db.close();

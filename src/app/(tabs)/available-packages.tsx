@@ -1,5 +1,6 @@
 import { ScrollView, StyleSheet, View } from 'react-native';
 
+import { Footer } from '@/components/Footer';
 import { JourneyPlanner } from '@/components/ui/journey-planner';
 import { screenPadding, ScreenHeader } from '@/components/ui/screen';
 import { MaxContentWidth, Spacing } from '@/constants/theme';
@@ -44,12 +45,13 @@ export default function ScheduleMyJourneyScreen() {
       <View style={styles.content}>
         <ScreenHeader
           brand={false}
-          title="Schedule My Journey"
+          title="Setup Trip"
           subtitle="Tell LOCI where you are going and parcels on that route are offered to you automatically."
         />
 
         <JourneyPlanner />
       </View>
+      <Footer />
     </ScrollView>
   );
 }

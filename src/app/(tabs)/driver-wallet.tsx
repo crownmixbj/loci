@@ -12,6 +12,7 @@ import {
 import { useCallback, useEffect, useState } from 'react';
 import { ScrollView, StyleSheet, Text, View } from 'react-native';
 
+import { Footer } from '@/components/Footer';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
@@ -117,6 +118,7 @@ export default function DriverWalletScreen() {
             next="/driver-wallet"
           />
         </View>
+        <Footer />
       </ScrollView>
     );
   }
@@ -155,6 +157,7 @@ export default function DriverWalletScreen() {
             style={styles.emptyCta}
           />
         </View>
+        <Footer />
       </ScrollView>
     );
   }
@@ -381,6 +384,7 @@ export default function DriverWalletScreen() {
           </Text>
         </View>
       </View>
+      <Footer />
     </ScrollView>
   );
 }

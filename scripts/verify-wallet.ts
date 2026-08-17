@@ -320,11 +320,17 @@ check(
  * Position in the dropdown, asserted by index rather than by the labels being
  * present.
  *
- * The brief was specific: below Assigned Trip, above Be a Driver. Checking only
- * that all three strings appear would pass with the wallet at the bottom.
+ * The brief was specific: the wallet sits in the middle of the driver's arc —
+ * after the dashboard they work from, before the guidelines they look things up
+ * in. Checking only that all three strings appear would pass with the wallet at
+ * the bottom.
+ *
+ * Matched on href rather than label, and anchored to the following `icon:` line
+ * so the group's own top-level href does not count as a child. Labels here have
+ * already been rewritten twice; the routes have not moved.
  */
-const order = ['Assigned Trip / Dashboard', 'Driver Wallet / Payouts', 'Be a Driver / Updates'].map(
-  (label) => navBar.indexOf(`label: '${label}'`),
+const order = ['/driver', '/driver-wallet', '/driver-guidelines'].map((href) =>
+  navBar.indexOf(`href: '${href}',\n        icon`),
 );
 check(
   'all three dropdown entries exist',
@@ -332,7 +338,7 @@ check(
   JSON.stringify(order),
 );
 check(
-  'the wallet sits between the dashboard and the application',
+  'the wallet sits between the dashboard and the reference material',
   order[0] < order[1] && order[1] < order[2],
   `found at ${JSON.stringify(order)}`,
 );

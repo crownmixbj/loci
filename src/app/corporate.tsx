@@ -10,6 +10,7 @@ import {
 } from 'lucide-react-native';
 import { Linking, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
+import { Footer } from '@/components/Footer';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
@@ -100,6 +101,7 @@ export default function CorporateScreen() {
           <Button label="Close" variant="secondary" onPress={() => router.back()} />
         </Card>
       </View>
+      <Footer />
     </ScrollView>
   );
 }

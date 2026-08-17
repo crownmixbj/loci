@@ -13,6 +13,7 @@ import {
 import { useEffect, useMemo, useState } from 'react';
 import { Linking, Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
+import { Footer } from '@/components/Footer';
 import { showDialog } from '@/components/ui/dialog';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -179,6 +180,7 @@ export default function LocationsScreen() {
           style={styles.cta}
         />
       </View>
+      <Footer />
     </ScrollView>
   );
 }

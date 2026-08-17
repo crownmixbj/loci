@@ -20,6 +20,7 @@ import {
 } from 'lucide-react-native';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
+import { Footer } from '@/components/Footer';
 import { Badge, RoutePill } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
@@ -77,6 +78,7 @@ export default function ParcelDetailScreen() {
             />
             <Button label="Go back" variant="secondary" onPress={() => router.back()} />
           </View>
+          <Footer />
         </ScrollView>
       </StickyHeaderScreen>
     );
@@ -283,6 +285,7 @@ export default function ParcelDetailScreen() {
 
           <Button label="Close" variant="secondary" onPress={() => router.back()} />
         </View>
+        <Footer />
       </ScrollView>
     </StickyHeaderScreen>
   );

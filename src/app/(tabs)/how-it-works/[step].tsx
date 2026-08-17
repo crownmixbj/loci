@@ -2,6 +2,7 @@ import { useLocalSearchParams, useRouter } from 'expo-router';
 import { ArrowLeft, ArrowRight, CircleCheckBig, PackageSearch } from 'lucide-react-native';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
+import { Footer } from '@/components/Footer';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { EmptyState, screenPadding } from '@/components/ui/screen';
@@ -42,6 +43,7 @@ export default function StepDetailScreen() {
           />
           <Button label="Back to Home" size="md" onPress={() => router.navigate('/')} />
         </Card>
+        <Footer />
       </ScrollView>
     );
   }
@@ -97,6 +99,7 @@ export default function StepDetailScreen() {
           <Text style={[styles.nextLabel, { color: theme.primary }]}>Next: {next.title} →</Text>
         </Pressable>
       )}
+      <Footer />
     </ScrollView>
   );
 }

@@ -41,6 +41,7 @@ import {
 } from 'react-native';
 
 import { errorMessage } from '@/lib/errors';
+import { Footer } from '@/components/Footer';
 import { BottomSheet } from '@/components/ui/bottom-sheet';
 import {
   ConfirmCheckbox,
@@ -50,8 +51,13 @@ import {
 } from '@/components/ui/form-wizard';
 import { ExpiryField } from '@/components/ui/expiry-field';
 import { parseExpiry } from '@/lib/expiry';
-import { resolveSenderPhoto, SenderPhotoSheet } from '@/components/ui/sender-photo-sheet';
-import { identityLabel, runIdentityCheck, type IdentityOutcome } from '@/store/capture-session';
+import { LiveSelfieCard } from '@/components/ui/live-selfie-card';
+import {
+  attachIdentityResult,
+  identityLabel,
+  runIdentityCheck,
+  type IdentityOutcome,
+} from '@/store/capture-session';
 import { showDialog } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
@@ -126,10 +132,26 @@ const VEHICLE_ICONS: Record<VehicleType, typeof Truck> = {
  */
 const DOCUMENTS = [
   {
+    /*
+      ⚠ Two slots, not one photo of both sides.
+
+        This asked for "front and back, clearly readable" in a single upload,
+        which in practice produces one of three things: the front only, a photo
+        of both sides laid out on a table at an angle that renders neither
+        readable, or two images the applicant could only attach one of. A
+        reviewer then has to reject and re-ask, which costs days.
+
+        Two slots also mean the *back* can be checked independently — it carries
+        the expiry date and the class of vehicle, which is what the licence is
+        being collected for.
+
+      ⚠ The key stays `license`, US spelling. It has been the storage path and
+        the jsonb key since the form shipped; see the note in `document_kinds`.
+    */
     key: 'license',
-    label: "Driver's licence",
-    hint: 'Front and back, clearly readable',
-    file: 'drivers-licence',
+    label: "Driver's licence — front",
+    hint: 'The side with your photo. All four corners in frame.',
+    file: 'drivers-licence-front',
     /*
       `expiry` mirrors `public.document_kinds` in 31_document_expiry.sql, and
       the server is the authority — `record_document` refuses a missing required
@@ -144,20 +166,50 @@ const DOCUMENTS = [
     expiry: 'required',
   },
   {
-    // A NIN slip has no expiry printed on it, and it is what almost everybody
-    // uploads here. See the note in `document_kinds`.
+    /*
+      The back of the licence, as its own slot.
+
+      ⚠ No expiry field here, even though the date is printed on this side.
+
+        One licence has one expiry, and it is already collected on the front
+        slot above — which is also the row `document_kinds` marks as blocking
+        dispatch. Asking again here would give a driver two boxes for one date
+        and LOCI two answers to reconcile.
+    */
+    expiry: 'none',
+    key: 'licenseBack',
+    label: "Driver's licence — back",
+    hint: 'The side with the expiry date and vehicle class.',
+    file: 'drivers-licence-back',
+  },
+  {
+    /*
+      ⚠ NIN only, where this used to accept three documents.
+
+        The hint offered "NIN slip, International Passport, or Voter's Card".
+        Only the NIN is checked against a government record — `verify-liveness`
+        matches a selfie against the NIMC photo for the applicant's NIN — so a
+        passport in this slot produced a document nobody could verify and a
+        reviewer approving on a glance.
+
+        Narrowing it means some applicants have to go and find their slip. That
+        is the cost, and it buys the difference between a document that was
+        looked at and one that was checked.
+
+      A NIN slip has no expiry printed on it. See `document_kinds`.
+    */
     expiry: 'none',
     key: 'id',
-    label: "Driver's government ID",
-    hint: "NIN slip, International Passport, or Voter's Card",
-    file: 'driver-government-id',
+    label: 'Your NIN slip',
+    hint: 'NIN slip or NIN card only — the number must match the NIN you entered.',
+    file: 'driver-nin-slip',
   },
   {
     expiry: 'none',
     key: 'guarantorId',
-    label: "Guarantor's government ID",
-    hint: "NIN slip, National ID card, or Voter's Card",
-    file: 'guarantor-government-id',
+    label: "Guarantor's NIN slip",
+    hint: 'NIN slip or NIN card only.',
+    file: 'guarantor-nin-slip',
   },
   {
     expiry: 'none',
@@ -503,8 +555,17 @@ export default function DriverSignupScreen() {
   const phoneLocked = hasRegisteredPhone(registeredPhone);
   const [phoneLockOpen, setPhoneLockOpen] = useState(false);
 
-  /** The selfie + NIN match that runs on submit. */
-  const [identityOpen, setIdentityOpen] = useState(false);
+  /*
+   * The live selfie and its NIN match, taken on page three.
+   *
+   * ⚠ Not written to the saved draft.
+   *
+   *   `useFormDraft` keeps thirty fields alive across a trip to sign-in, and a
+   *   capture session must not be one of them: it belongs to the account that
+   *   opened it and is spent once. A restored one would put a green tick on a
+   *   photograph that no longer exists.
+   */
+  const [photoSession, setPhotoSession] = useState<string | null>(null);
   const [identityOutcome, setIdentityOutcome] = useState<IdentityOutcome | null>(null);
   const { requireAuth, isAuthenticated } = useAuthGate();
 
@@ -525,6 +586,31 @@ export default function DriverSignupScreen() {
       return previous.phone === wanted ? previous : { ...previous, phone: wanted };
     });
   }, [phoneLocked, registeredPhone]);
+
+  /*
+   * The account's email, filled in for them.
+   *
+   * ⚠ Filled, not locked, and only when the field is empty.
+   *
+   *   The phone above *is* locked, because `guard_application_phone` refuses an
+   *   application whose number differs from the account's — so offering an
+   *   editable field there would be offering a refusal. Email has no such
+   *   trigger: somebody who signed up with a personal address and wants LOCI's
+   *   decision sent to a work one is making a reasonable request, and there is
+   *   nothing on the server that objects.
+   *
+   *   The emptiness check is what makes it safe to run on every session change.
+   *   Overwriting unconditionally would wipe an address they had just typed the
+   *   moment a token refreshed.
+   */
+  useEffect(() => {
+    const accountEmail = user?.email?.trim();
+    if (!accountEmail) return;
+
+    setForm((previous) =>
+      previous.email.trim() ? previous : { ...previous, email: accountEmail },
+    );
+  }, [user?.email]);
   const [documents, setDocuments] = useState<Record<DocumentKey, AttachedDocument>>(NO_DOCUMENTS);
 
   /*
@@ -547,6 +633,27 @@ export default function DriverSignupScreen() {
    */
   const [step, setStep] = useState(0);
   const [confirmed, setConfirmed] = useState(false);
+
+  /*
+   * Back to the top whenever the step changes.
+   *
+   * ⚠ An effect on `step`, not a call inside `goNext`.
+   *
+   *   Three things move the step — Next, Back, and the indicator jumping to a
+   *   completed page — and a failed submit moves it too. Scrolling in `goNext`
+   *   alone would leave the other three landing mid-page: pressing Back from
+   *   the documents card would drop somebody into the middle of the guarantor
+   *   form, at whatever offset they happened to have been at.
+   *
+   *   `animated: false`. This is a page change, not a scroll: animating it
+   *   makes the new step's fields fly past on the way, which reads as the form
+   *   having lost its place rather than having turned a page.
+   */
+  const scrollRef = useRef<ScrollView>(null);
+
+  useEffect(() => {
+    scrollRef.current?.scrollTo({ y: 0, animated: false });
+  }, [step]);
 
   /*
    * The answers outlive this component.
@@ -774,13 +881,30 @@ export default function DriverSignupScreen() {
     }
 
     /*
+     * ⚠ Checked here as well as by the disabled button.
+     *
+     *   The button already needs a photo, so this looks unreachable — until the
+     *   applicant signs out between capture and submit, or a draft restores
+     *   with the box ticked. A guard that lives only in a `disabled` prop is
+     *   one path away from not existing.
+     */
+    if (!photoSession) {
+      setStep(STEPS.length - 1);
+      showDialog(
+        'Take your live photo first',
+        'It is the last item on this page. LOCI compares it with the photo on your NIN record before a reviewer sees your application.',
+      );
+      return;
+    }
+
+    /*
      * Validate first, then ask for an account — the same order as the booking
      * form. Gating on entry would send someone away before they'd seen what
      * driving for LOCI involves, and would throw away everything they'd typed.
      * Here the application is already complete and the state survives the trip
      * to sign-in, because this screen stays mounted underneath.
      */
-    requireAuth(() => setIdentityOpen(true), {
+    requireAuth(() => void submitApplication(), {
       title: 'Sign in to submit your application',
       reason:
         'Your application is tied to an account: it is how we tell you the outcome, and how you get into the driver dashboard once approved. Nothing you have typed will be lost.',
@@ -789,7 +913,7 @@ export default function DriverSignupScreen() {
   };
 
   /*
-   * The identity step, between a complete application and a submitted one.
+   * The identity check, run when the photo is taken rather than at submit.
    *
    * The selfie is captured, checked for liveness, and matched against the photo
    * held for the applicant's NIN — then the application is submitted *whatever
@@ -797,32 +921,13 @@ export default function DriverSignupScreen() {
    * to refuse the applicant: NIMC photos can be a decade old, and a system that
    * auto-rejected on that number would turn "your face has aged" into "you
    * cannot work".
+   *
+   * ⚠ The verdict is stored here and written to the row by `submitApplication`
+   *   below, so the reviewer never opens an application that looks unchecked.
    */
-  const handleIdentityDone = async (result: { uri: string } | { sessionId: string }) => {
-    setIsSubmitting(true);
-    try {
-      const resolved = await resolveSenderPhoto(result);
-      if (!resolved.ok) {
-        showDialog(
-          'The photo did not upload',
-          `${resolved.error}\n\nNothing has been submitted — your answers are still here.`,
-        );
-        return;
-      }
-
-      /*
-       * Run the match before submitting, so the verdict is already on the row
-       * the reviewer opens. Running it after would leave a window where an
-       * application looked unchecked.
-       */
-      const identity = await runIdentityCheck(resolved.sessionId, form.nin.trim());
-      setIdentityOutcome(identity);
-
-      await submitApplication();
-    } finally {
-      setIsSubmitting(false);
-      setIdentityOpen(false);
-    }
+  const handlePhotoCaptured = async (sessionId: string) => {
+    setPhotoSession(sessionId);
+    setIdentityOutcome(await runIdentityCheck(sessionId, form.nin.trim()));
   };
 
   /** Runs only once we know whose application this is. */
@@ -896,7 +1001,7 @@ export default function DriverSignupScreen() {
       }
 
       try {
-        await insertApplication({
+        const created = await insertApplication({
           userId: user.id,
           reference: ref,
           fullName: form.fullName.trim(),
@@ -923,6 +1028,24 @@ export default function DriverSignupScreen() {
           // Storage paths now, not filenames — a reviewer can open these.
           documents: uploaded,
         });
+
+        /*
+         * The NIN verdict, brought across from the session onto the row that
+         * now exists.
+         *
+         * ⚠ After the insert, and deliberately not inside the try that reports
+         *   submission failures — this cannot fail the application. The
+         *   photograph was taken, checked and recorded before this point; all
+         *   that is at stake here is whether the reviewer sees the answer
+         *   without going to look for it.
+         */
+        if (photoSession) {
+          try {
+            await attachIdentityResult(created.id, photoSession);
+          } catch {
+            // Deliberately silent. See above.
+          }
+        }
       } catch (thrown) {
         setIsSubmitting(false);
 
@@ -989,6 +1112,7 @@ export default function DriverSignupScreen() {
       style={[styles.flex, { backgroundColor: PageCanvas }]}
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
       <ScrollView
+        ref={scrollRef}
         contentContainerStyle={styles.container}
         keyboardShouldPersistTaps="handled"
         keyboardDismissMode="on-drag">
@@ -1417,6 +1541,33 @@ export default function DriverSignupScreen() {
               </Card>
 
               {/*
+                The live photo, below the documents it is checked against.
+
+                Reading order matters here: the applicant has just uploaded a
+                NIN slip, and the next thing asked of them is a photograph to
+                compare with it. Above the documents that sequence is backwards.
+              */}
+              <LiveSelfieCard
+                purpose="driver"
+                captured={photoSession}
+                note={identityOutcome ? identityLabel(identityOutcome) : ''}
+                onCaptured={handlePhotoCaptured}
+                onCleared={() => {
+                  setPhotoSession(null);
+                  setIdentityOutcome(null);
+                }}
+                disabled={isSubmitting}
+                gate={(proceed) =>
+                  requireAuth(proceed, {
+                    title: 'Sign in to take your photo',
+                    reason:
+                      'The photo is checked against your NIN and stored on your account, so we need to know whose it is. Nothing you have typed will be lost.',
+                    next: '/driver-signup',
+                  })
+                }
+              />
+
+              {/*
                 The confirmation, immediately above the button it gates.
 
                 Far enough down that somebody has passed every field to reach
@@ -1436,11 +1587,13 @@ export default function DriverSignupScreen() {
           {/*
             Back and Next, or Back and Submit.
 
-            ⚠ Submit is disabled by the checkbox and by a malformed email, and
-              by nothing else. Disabling it on incomplete fields would leave an
-              applicant staring at a dead button with no indication of which of
-              thirty inputs is at fault — `handleSubmit` runs the validation and
-              sends them to the step that has the problem instead.
+            ⚠ Submit is disabled by the checkbox, the live photo, and a
+              malformed email — and by nothing else. Disabling it on incomplete
+              fields would leave an applicant staring at a dead button with no
+              indication of which of thirty inputs is at fault; `handleSubmit`
+              runs the validation and sends them to the step that has the
+              problem instead. The photo is the exception because it is on this
+              page, a few inches above, showing its own state.
           */}
           <WizardNav
             onBack={step > 0 ? goBack : undefined}
@@ -1458,13 +1611,15 @@ export default function DriverSignupScreen() {
                     )
                   }
                   onPress={handleSubmit}
-                  // Blocked until confirmed, and while the email is malformed.
-                  disabled={isSubmitting || !confirmed || !isValidEmail(form.email)}
+                  disabled={
+                    isSubmitting || !confirmed || !photoSession || !isValidEmail(form.email)
+                  }
                 />
               ) : undefined
             }
           />
         </View>
+        <Footer />
       </ScrollView>
 
       {/*
@@ -1475,14 +1630,6 @@ export default function DriverSignupScreen() {
         poor place to put the one piece of information that resolves the
         problem.
       */}
-      <SenderPhotoSheet
-        purpose="driver"
-        visible={identityOpen}
-        busy={isSubmitting}
-        onCancel={() => setIdentityOpen(false)}
-        onDone={handleIdentityDone}
-      />
-
       <BottomSheet visible={phoneLockOpen} onClose={() => setPhoneLockOpen(false)} maxHeight="55%">
         <View style={styles.lockSheet}>
           <View style={[styles.lockIcon, { backgroundColor: theme.primarySoft }]}>
@@ -1881,6 +2028,7 @@ function ReviewStatus({
           onPress={onGoToDashboard}
         />
       </View>
+      <Footer />
     </ScrollView>
   );
 }

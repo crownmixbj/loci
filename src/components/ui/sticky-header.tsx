@@ -7,14 +7,34 @@ import { useExperience } from '@/hooks/use-experience';
 import { useTopInset } from '@/hooks/use-top-inset';
 
 /**
- * The fixed top of the app: brand capsule plus the live delivery ticker.
+ * The top of the app: brand capsule plus the live delivery ticker.
  *
  * Extracted from the tabs layout so screens outside that group can mount the
- * same header instead of losing the navigation entirely. It is deliberately a
- * *sibling* of the scrolling content rather than the first row inside it —
- * that's what keeps it put while a screen scrolls under it, on native and web
- * alike, without needing `position: sticky` (which React Native has no concept
- * of).
+ * same header instead of losing the navigation entirely. It is a *sibling* of
+ * the scrolling content rather than the first row inside it, which is what lets
+ * it stay put while a screen scrolls under it — React Native has no concept of
+ * `position: sticky`.
+ *
+ * ⚠ Nothing here is positioned, animated, or driven by scrolling, and that is a
+ *   decision rather than an omission.
+ *
+ *   This briefly hid itself on scroll down and reappeared on scroll up. The
+ *   motion was real and so was the space it freed, but the way it freed the
+ *   space was to animate `marginTop` — a layout property — for 200ms every time
+ *   the direction changed. Every one of those frames reflowed the whole screen
+ *   below, which on the driver application is the largest tree in the app, and
+ *   the result was a header that saved 140px by making the scroll it saved them
+ *   for stutter.
+ *
+ *   The two goals turned out to be the same goal: reclaiming the space *is* the
+ *   layout work. A transform would have run on the compositor and been
+ *   perfectly smooth, but it moves pixels and leaves the box, so the header
+ *   would have vanished and left an empty band — the space still spent, now on
+ *   nothing. Given the choice between a smooth scroll and 140px, the scroll is
+ *   worth more: it is felt on every screen, all the time, by everybody.
+ *
+ *   `verify-layout` asserts this file stays free of scroll listeners and
+ *   animated layout, so the idea cannot quietly come back.
  */
 export function StickyHeader() {
   const experience = useExperience();

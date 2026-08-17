@@ -292,8 +292,10 @@ await run('1. only the documents that genuinely expire are blocking', async () =
 
   check(
     'licence and insurance require a date and block dispatch',
-    by.license.expiry_required && by.license.blocks_dispatch &&
-      by.insurance.expiry_required && by.insurance.blocks_dispatch,
+    by.license.expiry_required &&
+      by.license.blocks_dispatch &&
+      by.insurance.expiry_required &&
+      by.insurance.blocks_dispatch,
   );
   /*
    * The government ID slots used to allow an optional date. They no longer do.
@@ -319,9 +321,15 @@ await run('1. only the documents that genuinely expire are blocking', async () =
   );
   check(
     'so only the licence and insurance ask for one',
-    rows.filter((r) => r.expiry_allowed).map((r) => r.key).sort().join(',') ===
-      'insurance,license',
-    rows.filter((r) => r.expiry_allowed).map((r) => r.key).join(','),
+    rows
+      .filter((r) => r.expiry_allowed)
+      .map((r) => r.key)
+      .sort()
+      .join(',') === 'insurance,license',
+    rows
+      .filter((r) => r.expiry_allowed)
+      .map((r) => r.key)
+      .join(','),
   );
 });
 
@@ -692,9 +700,10 @@ await run('12. manual mode stops new offers without touching live ones', async (
   const [{ dispatch_booking: made }] = await q('select public.dispatch_booking($1)', [fresh]);
   check('but no new offer is made', made === null);
 
-  const none = await q('select count(*)::int as n from public.dispatch_offers where booking_id = $1', [
-    fresh,
-  ]);
+  const none = await q(
+    'select count(*)::int as n from public.dispatch_offers where booking_id = $1',
+    [fresh],
+  );
   check('and nothing was written', none[0].n === 0);
 });
 
@@ -867,7 +876,17 @@ await run('18. the queue is visible in both modes', async () => {
 await run('19. a driver sees every slot, filled or not', async () => {
   await be(DRIVER);
   const rows = await q('select * from public.my_documents()');
-  check('all five slots come back', rows.length === 5, `${rows.length} rows`);
+
+  /*
+   * Six now, not five: the licence became two slots, front and back.
+   *
+   * Asserted against the policy table rather than a literal, so adding a
+   * document kind does not fail a test that has nothing to say about it — what
+   * matters is that `my_documents` returns a row for *every* slot, including
+   * ones the driver never filled.
+   */
+  const [{ n: kinds }] = await q('select count(*)::int as n from public.document_kinds');
+  check('every slot comes back', rows.length === kinds, `${rows.length} rows vs ${kinds} kinds`);
 
   const missing = rows.find((r) => r.kind === 'guarantorId');
   check(

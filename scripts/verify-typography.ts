@@ -105,7 +105,10 @@ check(
 
 check('large text gets tighter leading', lineHeightFor(32) / 32 < lineHeightFor(12) / 12);
 check('a 16px body line is 24', lineHeightFor(16) === 24);
-check('leading is always a whole number', [11, 12, 14, 16, 17, 22, 28, 32].every((n) => Number.isInteger(lineHeightFor(n))));
+check(
+  'leading is always a whole number',
+  [11, 12, 14, 16, 17, 22, 28, 32].every((n) => Number.isInteger(lineHeightFor(n))),
+);
 check(
   'every sized token that wraps declares a line height',
   (['body', 'meta', 'caption', 'screenSubtitle', 'sectionTitle', 'cardTitle'] as const).every(

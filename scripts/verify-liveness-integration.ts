@@ -679,6 +679,66 @@ async function faceMatchChecks() {
   );
 }
 
+// ------------------------------------------- the capture is live, or nothing --
+
+/*
+ * ⚠ The gallery must not be reachable from any selfie path.
+ *
+ *   The entire claim the photo makes is that it was taken now, by the person
+ *   holding the device. One `launchImageLibraryAsync` on this path and the
+ *   claim is worth nothing — a saved picture of somebody else passes, and every
+ *   downstream check, including the NIN match, is checking the wrong face.
+ *
+ *   `photo-picker.tsx` is deliberately absent from this list. It collects
+ *   licences and insurance certificates, which people photograph in advance and
+ *   should be able to attach from their camera roll.
+ */
+for (const path of [
+  'src/components/ui/sender-photo-sheet.tsx',
+  'src/components/ui/live-selfie-card.tsx',
+  'src/app/capture/[id].tsx',
+]) {
+  const source = code(read(path));
+  check(
+    `${path.split('/').pop()} cannot reach the photo gallery`,
+    !/launchImageLibraryAsync|requestMediaLibraryPermissionsAsync|MediaLibrary/.test(source),
+    'a saved picture would pass every check the live one is there to survive',
+  );
+}
+
+check(
+  'the native capture opens the front camera',
+  flat(code(read('src/components/ui/sender-photo-sheet.tsx'))).includes(
+    'cameraType: ImagePicker.CameraType.front',
+  ),
+  'the rear camera on a selfie step is a prompt to photograph something else',
+);
+
+/*
+ * Both long forms refuse to submit without a session, in the handler as well as
+ * on the button.
+ *
+ * The disabled prop is the one people see; this is the one that still holds
+ * when the account signs out between capture and submit, or a saved draft comes
+ * back with the confirmation already ticked.
+ */
+for (const [label, path] of [
+  ['the parcel', 'src/app/(tabs)/book.tsx'],
+  ['the application', 'src/app/(tabs)/driver-signup.tsx'],
+] as const) {
+  const source = code(read(path));
+  check(
+    `${label} cannot be submitted without a live photo`,
+    /if \(!photoSession\) \{[\s\S]{0,400}?return;/.test(source),
+    'a guard that lives only in a `disabled` prop is one code path away from not existing',
+  );
+  check(
+    `and the session is never written to ${label}'s saved draft`,
+    !/photoSession/.test(source.split('useFormDraft')[1]?.slice(0, 600) ?? ''),
+    'a restored session is spent or expired — a green tick on a photograph that is gone',
+  );
+}
+
 void faceMatchChecks().then(() => {
   if (failures > 0) {
     console.error(`\n${failures} assertion(s) failed.`);
@@ -689,6 +749,7 @@ void faceMatchChecks().then(() => {
     'PASS — the Dojah secret is unreachable from the client bundle, the caller is identified\n' +
       '       from their own token, the image is read server-side, a sender onboards once and\n' +
       '       shows a face thereafter, sandbox is labelled as mock wherever a sender sees it,\n' +
-      '       and a provider outage never reads as a failed person.',
+      '       no selfie path can reach the photo gallery, neither form submits without a live\n' +
+      '       capture, and a provider outage never reads as a failed person.',
   );
 });

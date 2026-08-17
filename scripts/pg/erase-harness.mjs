@@ -153,7 +153,9 @@ await db.exec(`
 `);
 
 await run('the phone guard and erase_person load', async () => {
-  await db.exec(extractFunction(repair, 'create or replace function public.guard_application_phone'));
+  await db.exec(
+    extractFunction(repair, 'create or replace function public.guard_application_phone'),
+  );
   await db.exec(`
     create trigger driver_applications_lock_phone
       before insert or update on public.driver_applications
@@ -195,18 +197,21 @@ await run('seed a person with something identifying in every table', async () =>
              '8 Lebanon Street', '12 Awolowo Road', 'gate code 4411')`,
     [SUBJECT],
   );
-  await q(
-    "insert into public.bookings (driver_id, driver) values ($1, 'Omolola Adedapo')",
-    [SUBJECT],
-  );
+  await q("insert into public.bookings (driver_id, driver) values ($1, 'Omolola Adedapo')", [
+    SUBJECT,
+  ]);
 
   await q(
     "insert into public.sender_identity (user_id, nin, slip_path, reference_path) values ($1, '12345678901', 'u1/slip.jpg', 'u1/face.jpg')",
     [SUBJECT],
   );
   await q('insert into public.photo_capture_sessions (owner_id) values ($1)', [SUBJECT]);
-  await q("insert into public.driver_documents (driver_id, path) values ($1, 'u1/license.jpg')", [SUBJECT]);
-  await q("insert into public.push_tokens (token, user_id) values ('ExponentPushToken[x]', $1)", [SUBJECT]);
+  await q("insert into public.driver_documents (driver_id, path) values ($1, 'u1/license.jpg')", [
+    SUBJECT,
+  ]);
+  await q("insert into public.push_tokens (token, user_id) values ('ExponentPushToken[x]', $1)", [
+    SUBJECT,
+  ]);
   await q(
     "insert into public.payout_change_requests (driver_id, bank_name, account_number, account_name, previous_account_number) values ($1, 'Access', '9988776655', 'Omolola Adedapo', '0123456789')",
     [SUBJECT],
@@ -301,16 +306,26 @@ await run('4. the application keeps no identity, bank or guarantor detail', asyn
 
 await run('5. the tables added after 09_bans.sql are covered too', async () => {
   const empty = async (table, column) =>
-    (await q(`select count(*)::int as n from public.${table} where ${column} = $1`, [SUBJECT]))[0].n;
+    (await q(`select count(*)::int as n from public.${table} where ${column} = $1`, [SUBJECT]))[0]
+      .n;
 
-  check('the identity row is gone', (await empty('sender_identity', 'user_id')) === 0,
-    'a NIN and the path to a stored face photograph');
+  check(
+    'the identity row is gone',
+    (await empty('sender_identity', 'user_id')) === 0,
+    'a NIN and the path to a stored face photograph',
+  );
   check('capture sessions are gone', (await empty('photo_capture_sessions', 'owner_id')) === 0);
   check('document records are gone', (await empty('driver_documents', 'driver_id')) === 0);
-  check('push tokens are gone', (await empty('push_tokens', 'user_id')) === 0,
-    'a device the erased person can still be reached on');
-  check('payout change requests are gone', (await empty('payout_change_requests', 'driver_id')) === 0,
-    'they hold the new bank account and the previous one');
+  check(
+    'push tokens are gone',
+    (await empty('push_tokens', 'user_id')) === 0,
+    'a device the erased person can still be reached on',
+  );
+  check(
+    'payout change requests are gone',
+    (await empty('payout_change_requests', 'driver_id')) === 0,
+    'they hold the new bank account and the previous one',
+  );
 
   const [payout] = await q('select * from public.payout_requests where driver_id = $1', [SUBJECT]);
   check(
@@ -326,7 +341,9 @@ await run('5. the tables added after 09_bans.sql are covered too', async () => {
     'deleting it would leave LOCI unable to reconcile its own bank statement',
   );
 
-  const [history] = await q('select * from public.driver_edit_history where driver_id = $1', [SUBJECT]);
+  const [history] = await q('select * from public.driver_edit_history where driver_id = $1', [
+    SUBJECT,
+  ]);
   check(
     'the edit trail keeps the fact and loses the values',
     history && history.field === 'nin' && history.old_value === null && history.new_value === null,
@@ -370,7 +387,10 @@ await run('8. the erasure is audited without naming the person', async () => {
     "select * from public.app_events where message = 'account erased' order by id desc limit 1",
   );
   check('it is logged as a warning', event && event.level === 'warning', JSON.stringify(event));
-  check('with the subject id and the reason', event.context.subject === SUBJECT && event.context.reason === 'test');
+  check(
+    'with the subject id and the reason',
+    event.context.subject === SUBJECT && event.context.reason === 'test',
+  );
   check(
     'and nothing identifying in the context',
     !/Omolola|12345678901/.test(JSON.stringify(event.context)),
@@ -390,7 +410,7 @@ if (failures > 0) {
 console.log(
   'PASS — the phone lock no longer refuses an erasure and is still armed the moment it ends,\n' +
     '       nothing recognisable survives in the application, the eight tables added since\n' +
-    "       09_bans.sql are all covered, the payout ledger keeps its amounts and loses its\n" +
+    '       09_bans.sql are all covered, the payout ledger keeps its amounts and loses its\n' +
     '       account numbers, the recipient keeps their proof of delivery, and the audit row\n' +
     '       records the erasure without recording the person.',
 );

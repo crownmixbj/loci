@@ -351,6 +351,63 @@ check(
   'alignItems center on a full-width child does nothing, which is how two screens looked centred in the source and stretched in a browser',
 );
 
+// ------------------------------- the header stays out of the scroll path ---
+
+/*
+ * ⚠ A regression guard for a feature that was built, shipped and removed.
+ *
+ *   The header briefly hid itself on scroll down and returned on scroll up. It
+ *   worked. It also animated `marginTop` — a layout property — for 200ms on
+ *   every direction change, and every one of those frames reflowed the screen
+ *   below it. On the driver application, the largest tree in the app, that read
+ *   as stutter: a header that bought 140px by making the scrolling it bought
+ *   them for worse.
+ *
+ *   The two halves could not be separated. Reclaiming the space *is* the layout
+ *   work; a compositor-only transform moves the pixels and leaves the box, so
+ *   the header disappears and the space stays spent on an empty band. Between a
+ *   smooth scroll and 140px, the scroll wins — it is felt on every screen, all
+ *   the time, by everybody.
+ *
+ *   The idea is an easy one to have twice, which is why these assertions exist
+ *   rather than a note in a commit message.
+ */
+check(
+  'the header does not listen to scrolling',
+  !/addEventListener\(\s*'scroll'/.test(stickyHeader) && !/onScroll/.test(stickyHeader),
+  'a scroll listener driving a component this close to the root is a re-render per frame',
+);
+check(
+  'and animates no layout property',
+  !/Animated/.test(stickyHeader),
+  'margin, height, top and padding all reflow the subtree; on the driver form that is the stutter',
+);
+check(
+  'it is a plain View in normal flow',
+  flat(stickyHeader).includes('<View style={styles.header}>'),
+  'the fix for the stutter was to stop doing anything, so this has to stay boring',
+);
+check(
+  'nothing in the header stack is taken out of flow',
+  [
+    'src/components/ui/sticky-header.tsx',
+    'src/components/ui/app-nav-bar.tsx',
+    'src/components/LiveTicker.tsx',
+    'src/components/ui/top-status-bar.tsx',
+  ].every((path) => !/position:\s*'(fixed|sticky)'/.test(code(read(path)))),
+  'React Native has no sticky, and a fixed header on web would overlap the content it sits above',
+);
+
+/*
+ * The one exception, stated so it is not mistaken for a violation of the rule
+ * above: overlays that must stay with the viewport rather than the page.
+ */
+check(
+  'the toast is the only thing pinned over the page',
+  /position: 'absolute'/.test(code(read('src/components/ui/toast.tsx'))),
+  'a notification that scrolls away with the content is one nobody reads',
+);
+
 if (failures > 0) {
   console.error(`\n${failures} assertion(s) failed.`);
   process.exit(1);
@@ -360,6 +417,7 @@ console.log(
   'PASS — every native screen reserves the status bar exactly once, the build banner and\n' +
     '       the layouts never both claim it, on Post a Parcel the title, the delivery type\n' +
     '       and its rate stay pinned while only the form scrolls underneath, the driver\n' +
-    '       identity and bell stay put while the hub scrolls under them, and no route\n' +
-    '       stretches its content across a desktop viewport.',
+    '       identity and bell stay put while the hub scrolls under them, no route stretches\n' +
+    '       its content across a desktop viewport, and the top header stays a plain block in\n' +
+    '       normal flow — no scroll listener, no animated layout, nothing to stutter.',
 );

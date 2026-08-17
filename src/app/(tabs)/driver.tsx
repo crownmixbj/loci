@@ -22,6 +22,7 @@ import {
 import { useMemo } from 'react';
 import { ScrollView, StyleSheet, Text, View } from 'react-native';
 
+import { Footer } from '@/components/Footer';
 import { Badge, RoutePill } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
@@ -107,6 +108,7 @@ export default function DriverScreen() {
             next="/driver"
           />
         </View>
+        <Footer />
       </ScrollView>
     );
   }
@@ -174,6 +176,36 @@ export default function DriverScreen() {
             are load-bearing now rather than merely tidy — deleting either one
             would leave the wallet with no route to it at all.
         */}
+        {/*
+          ---------- the two entries that left the nav ----------
+
+          Setup Trip and this dashboard used to be items in the public "Driver"
+          dropdown. They are a driver's working tools rather than public
+          navigation, so they moved here — which makes this page the one place a
+          driver manages their work, and makes the removal safe: without these
+          links `/available-packages` would be reachable on web from nothing at
+          all.
+        */}
+        {/*
+          ⚠ Primary, and high on the page, because it is the whole job.
+
+            This was a quiet secondary button, and the *loud* one — "Schedule a
+            journey" — sat at the bottom of the empty state, below a full screen
+            of nothing. On a laptop it was under the fold, which meant the one
+            action that makes a driver's phone ring was the one action they had
+            to go looking for. Declaring a trip is not a secondary act on this
+            screen; it is the only thing here a driver does rather than reads.
+        */}
+        {isApprovedDriver && (
+          <Button
+            label="Setup Trip"
+            size="md"
+            icon={(color, size) => <PackageSearch color={color} size={size} />}
+            onPress={() => router.navigate('/available-packages')}
+            style={styles.workCta}
+          />
+        )}
+
         {application && (
           <Button
             label="Application status & updates"
@@ -207,16 +239,28 @@ export default function DriverScreen() {
         )}
 
         {myJobs.length === 0 ? (
+          /*
+            ⚠ No button under here any more, and its absence is the point.
+
+              The empty state used to end in a primary "Schedule a journey".
+              Two problems with it. It was the second copy of the button now
+              sitting above "Your deliveries", so moving that one up would have
+              left a driver two identical calls to action a screen apart. And it
+              was shown to *everybody*, including someone who has never applied
+              — the loudest control on their screen, pointing at a planner that
+              answers "scheduling unlocks when you are approved". Their next
+              step is the application card at the top, and this was competing
+              with it.
+
+              The message still names the fix, so nobody is left wondering what
+              to do; the control that does it is above, where an approved driver
+              will already have passed it.
+          */
           <View style={styles.emptyWrap}>
             <EmptyState
               icon={(color, size) => <ClipboardList color={color} size={size} />}
               title="No jobs yet"
-              message="You haven't carried anything yet. Tell LOCI the journeys you are making and parcels going the same way are offered to you automatically."
-            />
-            <Button
-              label="Schedule a journey"
-              icon={(color, size) => <PackageSearch color={color} size={size} />}
-              onPress={() => router.navigate('/available-packages')}
+              message="You haven't carried anything yet. Use Setup Trip to tell LOCI the journeys you are making, and parcels going the same way are offered to you automatically."
             />
           </View>
         ) : (
@@ -253,6 +297,7 @@ export default function DriverScreen() {
           </>
         )}
       </View>
+      <Footer />
     </ScrollView>
   );
 }
@@ -599,6 +644,10 @@ const styles = StyleSheet.create({
   gateBody: {
     ...Typography.caption,
     lineHeight: 18,
+  },
+  /** Spacing above the two working-tool links. */
+  workCta: {
+    marginTop: Spacing.three,
   },
   updatesCta: {
     marginBottom: Spacing.four,

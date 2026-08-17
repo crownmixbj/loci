@@ -15,7 +15,6 @@ import {
   MapPinned,
   Menu,
   PackagePlus,
-  PackageSearch,
   FileWarning,
   Radar,
   Scale,
@@ -232,45 +231,55 @@ const NAV_LINKS: NavLink[] = [
       label entirely. One entry, four destinations.
     */
     key: 'jobs-drivers',
-    label: 'Jobs & Drivers',
-    // The parent goes to the open-jobs board: of the four, it is the one people
-    // arrive wanting, and it is the only one that is useful signed out.
-    href: '/available-packages',
+    label: 'Driver',
+    /*
+      The parent now goes to the application screen, not the job board.
+
+      It used to point at `/available-packages` on the reasoning that browsing
+      open work is what people arrive wanting. That stopped being true when
+      Setup Trip moved inside the Driver Dashboard: the board is now a driver's
+      working tool rather than a shop window, and the one page that is useful to
+      somebody who is *not* yet a driver is the one that explains how to become
+      one.
+    */
+    href: '/driver-updates',
     icon: (color, size) => <Truck color={color} size={size} />,
-    description: 'Find work, apply to drive, track your application',
+    description: 'Apply to drive, track your application, and manage your work',
     also: ['/driver', '/driver-signup', '/driver-updates', '/driver-guidelines', '/driver-wallet'],
+    /*
+      ⚠ Four entries, and two deliberate omissions.
+
+        Setup Trip (`/available-packages`) and Assigned Trip (`/driver`) used to
+        sit here and no longer do. Both are things a driver does *while
+        working*, and neither means anything to the signed-out visitor this menu
+        is mostly shown to — a public navigation bar advertising a job board you
+        cannot use is a menu that mostly leads to refusals.
+
+        Neither is orphaned. The Driver Dashboard carries both, it is the second
+        entry below, and the native tab bar still has them. `verify-navigation`
+        asserts every route keeps a way in, which is the check that would have
+        caught this had I got it wrong.
+
+      The order is the driver's own arc: apply, work, get paid, look things up.
+    */
     children: [
       {
-        key: 'find',
-        label: 'Schedule My Journey',
-        href: '/available-packages',
-        icon: (color, size) => <PackageSearch color={color} size={size} />,
+        key: 'updates',
+        label: 'Be a Driver / Update',
+        href: '/driver-updates',
+        icon: (color, size) => <BellRing color={color} size={size} />,
       },
       {
-        key: 'portal',
-        label: 'Assigned Trip / Dashboard',
+        key: 'dashboard',
+        label: 'Driver Dashboard',
         href: '/driver',
         icon: (color, size) => <LayoutDashboard color={color} size={size} />,
       },
       {
-        /*
-          Between the dashboard and the application on purpose.
-
-          The order down this menu is the driver's own arc: find work, do the
-          work, get paid, apply. Money sits next to the dashboard it is earned
-          on rather than next to the application form, which is the one entry
-          here an approved driver never opens again.
-        */
         key: 'wallet',
         label: 'Driver Wallet / Payouts',
         href: '/driver-wallet',
         icon: (color, size) => <Wallet color={color} size={size} />,
-      },
-      {
-        key: 'updates',
-        label: 'Be a Driver / Updates',
-        href: '/driver-updates',
-        icon: (color, size) => <BellRing color={color} size={size} />,
       },
       {
         key: 'guidelines',

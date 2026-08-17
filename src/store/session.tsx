@@ -196,6 +196,16 @@ function toSessionUser(user: User): SessionUser {
  */
 const AUTH_TIMEOUT_MS = 20_000;
 
+/**
+ * Shorter than the auth timeout, because nothing is waiting on a person here.
+ *
+ * Signing in is an action somebody just took and is watching; twenty seconds of
+ * patience is reasonable. The application lookup runs unprompted at launch, and
+ * a screen blocked on it shows a spinner with no explanation — so it gives up
+ * sooner and carries on with what it knows.
+ */
+const STATUS_TIMEOUT_MS = 8_000;
+
 function withTimeout<T>(promise: PromiseLike<T>, ms = AUTH_TIMEOUT_MS): Promise<T> {
   return new Promise<T>((resolve, reject) => {
     const timer = setTimeout(
@@ -377,9 +387,24 @@ export function SessionProvider({
       return;
     }
 
+    /*
+     * ⚠ Timed out, and the failures fall back rather than propagate.
+     *
+     *   `driverStatusLoaded` is what Be a Driver / Updates waits on before it
+     *   can show anything at all, so a request that never settles is a page
+     *   that spins forever. Both calls already swallowed rejections; neither
+     *   had any protection against simply hanging, which is what a phone
+     *   holding one bar actually does.
+     *
+     *   Falling back to "no application, not an admin" is the safe direction:
+     *   it offers the form to somebody who may have already applied, which
+     *   `one_open_application` refuses with a message they can act on. The
+     *   opposite mistake — assuming an application exists — shows an applicant
+     *   a timeline of nothing.
+     */
     const [nextApplication, nextIsAdmin] = await Promise.all([
-      fetchMyApplication(user.id).catch(() => null),
-      fetchIsAdmin(user.id).catch(() => false),
+      withTimeout(fetchMyApplication(user.id), STATUS_TIMEOUT_MS).catch(() => null),
+      withTimeout(fetchIsAdmin(user.id), STATUS_TIMEOUT_MS).catch(() => false),
     ]);
 
     setApplication(nextApplication);
@@ -430,7 +455,28 @@ export function SessionProvider({
    * not blank `driverStatusLoaded` and flash a spinner over whatever the person
    * was reading.
    */
-  const loadedForUserId = useRef<string | null>(null);
+  /*
+   * ⚠ Starts `undefined`, and the difference from `null` is the whole bug.
+   *
+   *   This was `useRef<string | null>(null)`. A signed-out visitor also has an
+   *   id of `null`, so on the very first render the guard below compared null
+   *   to null, matched, and returned — `refreshDriverStatus` was never called,
+   *   `driverStatusLoaded` stayed false, and it never got another chance:
+   *   `getSession()` resolving to no session sets the same `null` React bails
+   *   out on, so nothing downstream changes identity and the effect does not
+   *   re-run.
+   *
+   *   Signed-in people were unaffected, which is what hid it — their id arrives
+   *   as a string, which does differ from null. Signed out, Be a Driver /
+   *   Updates spun forever, because it waits for `driverStatusLoaded` before
+   *   choosing between the application form and the timeline. The page that
+   *   exists to be opened by people who have not applied was the one page they
+   *   could not open.
+   *
+   *   `undefined` is a value no account can have, so "nobody yet" and "nobody,
+   *   confirmed" are finally distinguishable.
+   */
+  const loadedForUserId = useRef<string | null | undefined>(undefined);
 
   useEffect(() => {
     const id = user?.id ?? null;
@@ -517,7 +563,8 @@ export function SessionProvider({
    * anyone without an approved application, so a stale 'driver' cannot strand
    * someone whose approval was revoked.
    */
-  const restoredViewFor = useRef<string | null>(null);
+  /* `undefined`, for the reason spelled out on `loadedForUserId` above. */
+  const restoredViewFor = useRef<string | null | undefined>(undefined);
 
   useEffect(() => {
     const id = user?.id ?? null;

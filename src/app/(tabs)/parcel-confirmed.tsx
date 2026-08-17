@@ -27,6 +27,7 @@ import {
   View,
 } from 'react-native';
 
+import { Footer } from '@/components/Footer';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
@@ -103,6 +104,7 @@ export default function ParcelConfirmedScreen() {
             <Button label="Post a Parcel" size="md" onPress={() => router.replace('/book')} />
           </Card>
         </View>
+        <Footer />
       </ScrollView>
     );
   }
@@ -326,6 +328,7 @@ export default function ParcelConfirmedScreen() {
           </Text>
         </View>
       </View>
+      <Footer />
     </ScrollView>
   );
 }

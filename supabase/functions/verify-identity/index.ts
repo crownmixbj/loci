@@ -1,6 +1,19 @@
 /**
- * Matches a driver applicant's live selfie against the photo NIMC holds for
- * their NIN.
+ * Matches a live selfie against the photo NIMC holds for a NIN.
+ *
+ * ⚠ Two subjects, one check: a driver applicant and a parcel sender.
+ *
+ *   Both are the same call to Dojah and differ only in where the NIN comes from
+ *   and where the verdict is written. This function used to serve the driver
+ *   alone, which meant `submitOnboarding` in `store/identity.ts` — the sender's
+ *   whole onboarding path — called it without a NIN, got a 400 back, and
+ *   reported 'unavailable' forever. Senders typed a NIN and photographed a slip
+ *   for a check that could not run.
+ *
+ *   The sender's NIN is read from `sender_identity`, not from the request body.
+ *   `begin_identity_check` has already recorded it under RLS, and taking it
+ *   from the row means the verdict is stamped against the NIN of record rather
+ *   than one supplied at call time by the client being checked.
  *
  * ⚠ Sensitive personal data. Unlike the sender liveness check, this processes a
  *   face *to establish who someone is* — the NDPA's definition of biometric
@@ -74,15 +87,43 @@ Deno.serve(async (request: Request) => {
 
   let sessionId = '';
   let nin = '';
+  let subject: 'driver' | 'sender' = 'driver';
   try {
-    const body = (await request.json()) as { session_id?: unknown; nin?: unknown };
+    const body = (await request.json()) as {
+      session_id?: unknown;
+      nin?: unknown;
+      subject?: unknown;
+    };
     sessionId = typeof body.session_id === 'string' ? body.session_id : '';
     nin = typeof body.nin === 'string' ? body.nin.replace(/\D/g, '') : '';
+    /*
+     * Defaults to 'driver' — the only subject that existed when this shipped.
+     * An older client that does not send the field keeps working.
+     */
+    subject = body.subject === 'sender' ? 'sender' : 'driver';
   } catch {
     return json({ error: 'Bad request' }, 400);
   }
 
   if (!sessionId) return json({ error: 'session_id is required' }, 400);
+
+  /*
+   * The sender's NIN is on their own row, put there by `begin_identity_check`.
+   * Anything the client sent for a sender is ignored.
+   */
+  if (subject === 'sender') {
+    const found = await db(`sender_identity?user_id=eq.${encodeURIComponent(userId)}&select=nin`);
+    if (!found.ok) return json({ error: 'Could not read the identity record' }, 500);
+    const identityRows = (await found.json()) as { nin: string | null }[];
+    nin = (identityRows[0]?.nin ?? '').replace(/\D/g, '');
+
+    if (!nin) {
+      return json({
+        status: 'unavailable',
+        message: 'No NIN on file yet. Add your NIN and slip before the photo.',
+      });
+    }
+  }
 
   /*
    * A NIN is eleven digits. Checked here so a typo costs nothing rather than a
@@ -117,7 +158,7 @@ Deno.serve(async (request: Request) => {
    * deployment that has not bought one yet.
    */
   if (!credentials) {
-    await record(userId, { status: 'unavailable', confidence: null, environment: null });
+    await record({ verdict: 'unavailable', confidence: null, environment: null, photoPath: null });
     return json({
       status: 'unavailable',
       message: 'Identity checking is not configured on this environment.',
@@ -133,15 +174,11 @@ Deno.serve(async (request: Request) => {
   const selfie = toBase64(new Uint8Array(await download.arrayBuffer()));
   const result = await verifyNinSelfie(nin, selfie, credentials);
 
-  await record(userId, {
-    status:
-      result.verdict === 'matched'
-        ? 'matched'
-        : result.verdict === 'mismatch'
-          ? 'mismatch'
-          : 'unavailable',
+  await record({
+    verdict: result.verdict,
     confidence: result.confidence,
     environment: result.environment,
+    photoPath: session.photo_path,
   });
 
   /*
@@ -152,33 +189,100 @@ Deno.serve(async (request: Request) => {
    * pulled from a government database, plus their photograph, would be
    * collecting sensitive data for no purpose anyone could state.
    */
+  /*
+   * Answered in the vocabulary the caller's half of the system uses.
+   *
+   * `driver_applications` records matched/mismatch; `sender_identity` records
+   * verified/flagged, because on that side a match also promotes the selfie to
+   * the master reference every later parcel is compared against. Returning one
+   * vocabulary to both callers would mean one of them silently mapping every
+   * verdict to 'unavailable' — which is exactly what the sender store did.
+   */
   return json({
-    status: result.verdict,
+    status: subject === 'sender' ? senderVerdict(result.verdict) : result.verdict,
     confidence: result.confidence,
     environment: result.environment,
     message: result.message,
   });
 
-  async function record(
-    driverId: string,
-    verdict: { status: string; confidence: number | null; environment: string | null },
-  ): Promise<void> {
+  function senderVerdict(verdict: string): string {
+    if (verdict === 'matched') return 'verified';
+    if (verdict === 'mismatch') return 'flagged';
+    return 'unavailable';
+  }
+
+  async function record(outcome: {
+    verdict: string;
+    confidence: number | null;
+    environment: string | null;
+    /** Promoted to the sender's master reference on a match. Never on a driver. */
+    photoPath: string | null;
+  }): Promise<void> {
+    if (subject === 'sender') {
+      /*
+       * Through the RPC, not a PATCH.
+       *
+       * `record_identity_result` is where the rules live: 'unavailable' leaves
+       * the status untouched, and only a *matched* selfie is promoted to the
+       * reference photo. Writing the columns directly from here would put a
+       * second, quietly different copy of those rules in a file nobody reads
+       * next to the first.
+       */
+      await db('rpc/record_identity_result', {
+        method: 'POST',
+        headers: { Prefer: 'return=minimal' },
+        body: JSON.stringify({
+          target: userId,
+          verdict: senderVerdict(outcome.verdict),
+          reference: outcome.photoPath,
+          score: outcome.confidence,
+          env: outcome.environment,
+        }),
+      });
+      return;
+    }
+
+    const columns = {
+      identity_status:
+        outcome.verdict === 'matched'
+          ? 'matched'
+          : outcome.verdict === 'mismatch'
+            ? 'mismatch'
+            : 'unavailable',
+      identity_confidence: outcome.confidence,
+      identity_environment: outcome.environment,
+      identity_checked_at: new Date().toISOString(),
+    };
+
     /*
-     * Written against the applicant's most recent pending application.
+     * ⚠ On the session first, and this is the write that actually survives.
      *
-     * Scoped by user id as well as status: the service role bypasses RLS, so
+     *   The applicant runs this check on page three of the wizard, *before*
+     *   their application row exists. The PATCH below matches nothing at that
+     *   point, so it used to be the only write and the verdict was lost. The
+     *   session is where the photo already lives and it exists from the moment
+     *   the camera opens; `attach_identity_result` copies these four columns
+     *   onto the application once there is one.
+     */
+    await db(`photo_capture_sessions?id=eq.${encodeURIComponent(sessionId)}`, {
+      method: 'PATCH',
+      headers: { Prefer: 'return=minimal' },
+      body: JSON.stringify(columns),
+    });
+
+    /*
+     * And onto a pending application if one is already open.
+     *
+     * Not redundant: an applicant re-taking their photo after submitting has a
+     * row waiting, and this keeps it current without a second round trip.
+     * Scoped by user id as well as status — the service role bypasses RLS, so
      * without the filter this would happily stamp a verdict on somebody else's
      * file.
      */
-    await db(`driver_applications?user_id=eq.${encodeURIComponent(driverId)}&status=eq.pending`, {
+    await db(`driver_applications?user_id=eq.${encodeURIComponent(userId)}&status=eq.pending`, {
       method: 'PATCH',
       headers: { Prefer: 'return=minimal' },
-      body: JSON.stringify({
-        identity_status: verdict.status,
-        identity_confidence: verdict.confidence,
-        identity_environment: verdict.environment,
-        identity_checked_at: new Date().toISOString(),
-      }),
+      body: JSON.stringify(columns),
     });
   }
 });

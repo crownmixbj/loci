@@ -49,6 +49,8 @@ const flat = (source: string) => source.replace(/\s+/g, ' ');
 
 const sql = read('supabase/16_driver_identity.sql');
 const sqlCode = code(sql);
+/* The handoff that carries the verdict from the session onto the application. */
+const handoffCode = code(read('supabase/34_identity_handoff.sql'));
 const signup = read('src/app/(tabs)/driver-signup.tsx');
 const identityFn = read('supabase/functions/verify-identity/index.ts');
 
@@ -232,14 +234,90 @@ check(
 check(
   'a mismatch does not stop the application being submitted',
   flat(code(signup)).includes('await runIdentityCheck(') &&
-    flat(code(signup)).includes('await submitApplication();') &&
-    !/if \(identity\.status[^)]*\) return/.test(flat(code(signup))),
+    !/if \(identity\w*\.status[^)]*\) return/.test(flat(code(signup))) &&
+    !/disabled=\{[^}]*identityOutcome/.test(flat(code(signup))),
   'NIMC photos can be a decade old — auto-rejecting turns "your face has aged" into "you cannot work"',
 );
+
+/*
+ * ⚠ This check used to say the opposite, and it was wrong.
+ *
+ *   It asserted `runIdentityCheck` ran *before* `submitApplication`, on the
+ *   stated grounds that the other order leaves a window where the application
+ *   looks unchecked. But the verdict's only home was
+ *
+ *     PATCH driver_applications?user_id=eq.<caller>&status=eq.pending
+ *
+ *   and running first meant there was no such row yet: the patch matched
+ *   nothing and every first-time applicant's four identity columns stayed null
+ *   forever. The window the assertion was protecting against was permanent, and
+ *   the assertion was pinning the cause of it.
+ *
+ *   The verdict now lands on the capture session — which exists from the moment
+ *   the camera opens — and `attach_identity_result` copies it across once the
+ *   application row is there. So the order is reversed and the window is closed
+ *   for real.
+ */
+/*
+ * ⚠ Pinned to the PATCH, not to the table name.
+ *
+ *   My first version asked whether the file contained
+ *   `photo_capture_sessions?id=eq....` — which the *lookup* at the top of the
+ *   function already satisfies. Deleting the write entirely left the assertion
+ *   green. This one requires the method as well, which is the part that makes
+ *   it a write.
+ */
 check(
-  'the verdict is written before the application is submitted',
-  code(signup).indexOf('runIdentityCheck') < code(signup).indexOf('await submitApplication'),
-  'the other order leaves a window where an application looks unchecked to a reviewer',
+  'the verdict is parked on the session, which exists before the application does',
+  /photo_capture_sessions\?id=eq\.\$\{encodeURIComponent\(sessionId\)\}`,\s*\{\s*method: 'PATCH'/.test(
+    identityFn,
+  ),
+  'patching driver_applications alone drops the verdict of every first-time applicant',
+);
+
+/*
+ * The sender half of the same function.
+ *
+ * `submitOnboarding` called this without a NIN and without a subject for as
+ * long as it existed, so every sender check returned 'unavailable' and the NIN
+ * and slip they were asked for were collected for nothing.
+ */
+check(
+  'a sender check is asked for as a sender',
+  flat(code(read('src/store/identity.ts'))).includes(
+    "body: { session_id: sessionId, subject: 'sender' }",
+  ),
+  'without the subject the call is treated as a driver application and answers in the wrong vocabulary',
+);
+check(
+  "and the sender's NIN is read from their row, not from the request",
+  flat(identityFn).includes(
+    'sender_identity?user_id=eq.${encodeURIComponent(userId)}&select=nin',
+  ) && flat(identityFn).includes('Anything the client sent for a sender is ignored'),
+  'a NIN supplied at call time is a NIN the person being checked chose to be checked against',
+);
+check(
+  'and the verdict goes through the RPC that owns the promotion rules',
+  flat(identityFn).includes("db('rpc/record_identity_result'"),
+  'writing the columns directly would put a second copy of "only a match becomes the reference" here',
+);
+check(
+  'and copied onto the application once there is one',
+  code(signup).indexOf('await insertApplication') < code(signup).indexOf('attachIdentityResult('),
+  'copying first would copy onto a row that does not exist yet',
+);
+check(
+  'the copy cannot fail the application',
+  /attachIdentityResult\([\s\S]{0,80}\);\s*\} catch \{/.test(code(signup)),
+  'the photo was taken, checked and stored before this point — only the reviewer’s convenience is at stake',
+);
+check(
+  'and the applicant cannot forge what is copied',
+  flat(handoffCode).includes('attach_identity_result') &&
+    flat(handoffCode).includes("current_setting('loci.attaching_identity', true) = 'on'") &&
+    flat(handoffCode).includes('and owner_id = actor') &&
+    flat(handoffCode).includes('and user_id = actor'),
+  'an unscoped copy would let an applicant name a session, or an application, that is not theirs',
 );
 check(
   'the applicant is told the outcome',
@@ -258,7 +336,7 @@ check(
   flat(read('src/components/ui/sender-photo-sheet.tsx')).includes(
     'This is an identity check: your selfie is compared with the photo on your NIN record',
   ),
-  'the sender copy says the opposite, and both have to be true of their own flow',
+  'the applicant is handing over a face to be matched against a government record, and has to be told so',
 );
 
 check(
@@ -269,7 +347,7 @@ check(
 check(
   'the verdict is written only against the caller’s own pending application',
   flat(identityFn).includes(
-    'driver_applications?user_id=eq.${encodeURIComponent(driverId)}&status=eq.pending',
+    'driver_applications?user_id=eq.${encodeURIComponent(userId)}&status=eq.pending',
   ),
   'the service role bypasses RLS, so an unscoped patch would stamp a verdict on someone else’s file',
 );

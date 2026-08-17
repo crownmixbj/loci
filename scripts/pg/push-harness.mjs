@@ -169,7 +169,10 @@ await run('scenario 2 — a configured project notifies', async () => {
     sent[0]?.url === 'https://demo.functions.supabase.co/notify-offer',
     'this is the line that was invalid SQL — it never ran, so it was never wrong out loud',
   );
-  check('and authenticates as the service role', sent[0]?.headers?.Authorization === 'Bearer svc-key-abc');
+  check(
+    'and authenticates as the service role',
+    sent[0]?.headers?.Authorization === 'Bearer svc-key-abc',
+  );
   check(
     'the body carries the offer id and nothing else',
     sent[0]?.body?.offer_id === offerId && Object.keys(sent[0].body).length === 1,
@@ -221,17 +224,13 @@ await run('scenario 4 — a broken notifier does not take the offer with it', as
   );
   check(
     'and the failure is recorded rather than swallowed',
-    (
-      await q(
-        "select 1 from public.app_events where area = 'push' and level = 'error'",
-      )
-    ).length === 1,
+    (await q("select 1 from public.app_events where area = 'push' and level = 'error'")).length ===
+      1,
   );
   check(
     'without putting the service key in the log',
-    (
-      await q("select 1 from public.app_events where context::text like '%svc-key-abc%'")
-    ).length === 0,
+    (await q("select 1 from public.app_events where context::text like '%svc-key-abc%'")).length ===
+      0,
     'the key is in scope at the point the error is written, which is exactly when it is easiest to log by accident',
   );
 });

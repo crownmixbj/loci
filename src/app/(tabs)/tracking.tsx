@@ -15,6 +15,7 @@ import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-
 
 import { Image } from 'expo-image';
 
+import { Footer } from '@/components/Footer';
 import { Badge, RoutePill } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
@@ -183,6 +184,7 @@ export default function TrackingScreen() {
           <NotFound id={normalised} signedIn={Boolean(viewerId)} />
         )}
       </View>
+      <Footer />
     </ScrollView>
   );
 }

@@ -10,6 +10,7 @@ import {
 import { useEffect, useState } from 'react';
 import { ScrollView, StyleSheet, Text, View } from 'react-native';
 
+import { Footer } from '@/components/Footer';
 import { Card } from '@/components/ui/card';
 import { ChipGroup } from '@/components/ui/chip';
 import { screenPadding, ScreenHeader, SectionLabel } from '@/components/ui/screen';
@@ -106,6 +107,7 @@ export default function LegalScreen() {
 
         {section === 'terms' ? <Terms /> : <Privacy />}
       </View>
+      <Footer />
     </ScrollView>
   );
 }

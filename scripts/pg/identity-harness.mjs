@@ -43,6 +43,14 @@ function extractFunction(sql, signatureStart) {
   return sql.slice(at, end + 3);
 }
 
+/** One statement, from a line start to its terminating semicolon. */
+function extractStatement(sql, signatureStart) {
+  const at = statementStart(sql, signatureStart);
+  const end = sql.indexOf(';', at);
+  if (end === -1) throw new Error(`unterminated statement: ${signatureStart}`);
+  return sql.slice(at, end + 1);
+}
+
 /** The `create table` and everything up to its closing paren. */
 function extractTable(sql, name) {
   const at = statementStart(sql, `create table if not exists ${name} (`);
@@ -66,6 +74,7 @@ const db = await PGlite.create();
 const q = async (sql, params = []) => (await db.query(sql, params)).rows;
 
 const identity = read('supabase/28_sender_identity.sql');
+const handoff = read('supabase/34_identity_handoff.sql');
 
 await db.exec(`
   create schema auth;
@@ -200,7 +209,10 @@ await run('scenario 5 — a match promotes the selfie to master reference', asyn
   const saved = await row(ALICE);
   check('the account is verified', saved.status === 'verified');
   check('the reference photo is stored', saved.reference_path === `${ALICE}/reference.jpg`);
-  check('with the confidence and the environment', Number(saved.confidence) === 92 && saved.environment === 'sandbox');
+  check(
+    'with the confidence and the environment',
+    Number(saved.confidence) === 92 && saved.environment === 'sandbox',
+  );
   check(
     'and onboarding is done',
     (await needsOnboarding(ALICE)) === false,
@@ -290,7 +302,10 @@ await run('scenario 9 — an unknown verdict is refused', async () => {
 
 await run('scenario 10 — the admin queue carries no identifiers', async () => {
   const queue = await q('select * from public.admin_flagged_identities()');
-  check('the flagged account is listed', queue.some((r) => r.user_id === BOLA));
+  check(
+    'the flagged account is listed',
+    queue.some((r) => r.user_id === BOLA),
+  );
   check(
     'with only the last four digits of the NIN',
     queue.every((r) => r.nin_last4 === null || r.nin_last4.length === 4),
@@ -299,6 +314,199 @@ await run('scenario 10 — the admin queue carries no identifiers', async () => 
     'and no photo path anywhere in the result',
     !JSON.stringify(queue).includes('reference.jpg') && !JSON.stringify(queue).includes('slip'),
     'a review queue is a screen somebody leaves open; it should not be a gallery of customers faces',
+  );
+});
+
+// ------------------------------------- the driver verdict, and its handoff ---
+
+/*
+ * Scenario 11 covers the bug 34_identity_handoff.sql exists to fix.
+ *
+ * `verify-identity` used to write the verdict *only* onto
+ * `driver_applications ... status = pending`, and the form called it before
+ * inserting the application. Zero rows matched, and every first-time
+ * applicant's identity columns stayed null while the code, the comments and an
+ * assertion all said the check had run.
+ *
+ * ⚠ The stubs below carry the real guard trigger from 16_driver_identity.sql.
+ *
+ *   Without it this would prove nothing: the whole question is whether the copy
+ *   gets *past* a trigger that refuses client writes to those columns, and a
+ *   table with no trigger lets anything through. A stub looser than the thing
+ *   it stands in for does not test the thing it stands in for.
+ */
+await db.exec(`
+  create table public.photo_capture_sessions (
+    id uuid primary key default gen_random_uuid(),
+    owner_id uuid not null,
+    photo_path text,
+    completed_at timestamptz
+  );
+
+  create table public.driver_applications (
+    id uuid primary key default gen_random_uuid(),
+    user_id uuid not null,
+    status text not null default 'pending',
+    identity_status text
+      check (identity_status in ('matched', 'mismatch', 'unavailable', 'skipped')),
+    identity_confidence numeric,
+    identity_environment text
+      check (identity_environment in ('sandbox', 'production')),
+    identity_checked_at timestamptz
+  );
+`);
+
+for (const statement of [
+  extractStatement(handoff, 'alter table public.photo_capture_sessions'),
+  extractFunction(handoff, 'create or replace function public.guard_identity_columns()'),
+  extractFunction(handoff, 'create or replace function public.attach_identity_result('),
+]) {
+  await db.exec(statement);
+}
+
+await db.exec(`
+  create trigger driver_applications_guard_identity
+    before update on public.driver_applications
+    for each row execute function public.guard_identity_columns();
+  create trigger photo_capture_sessions_guard_identity
+    before update on public.photo_capture_sessions
+    for each row execute function public.guard_identity_columns();
+`);
+
+const SESSION = '33333333-3333-3333-3333-333333333333';
+const APPLICATION = '44444444-4444-4444-4444-444444444444';
+
+await run(
+  'scenario 11 — the verdict survives being recorded before the application exists',
+  async () => {
+    await q(
+      'insert into public.photo_capture_sessions (id, owner_id, photo_path) values ($1, $2, $3)',
+      [SESSION, ALICE, `${ALICE}/selfie.jpg`],
+    );
+
+    /*
+     * The service role writing the verdict. `auth.uid()` is null for it, which is
+     * the branch the guard lets through.
+     */
+    await db.exec('delete from public.who');
+    await q(
+      `update public.photo_capture_sessions
+        set identity_status = 'matched', identity_confidence = 97.4,
+            identity_environment = 'production', identity_checked_at = now()
+      where id = $1`,
+      [SESSION],
+    );
+
+    await signIn(ALICE);
+    await q('insert into public.driver_applications (id, user_id) values ($1, $2)', [
+      APPLICATION,
+      ALICE,
+    ]);
+
+    await q('select public.attach_identity_result($1, $2)', [APPLICATION, SESSION]);
+
+    const app = (
+      await q('select * from public.driver_applications where id = $1', [APPLICATION])
+    )[0];
+    check(
+      'the verdict lands on the application',
+      app.identity_status === 'matched' && Number(app.identity_confidence) === 97.4,
+      JSON.stringify({ status: app.identity_status, confidence: app.identity_confidence }),
+    );
+    check(
+      'with the environment that produced it',
+      app.identity_environment === 'production',
+      'a sandbox match is a mock service agreeing with a photo it never compared',
+    );
+  },
+);
+
+await run('scenario 12 — an applicant cannot write their own verdict', async () => {
+  await signIn(ALICE);
+  let refused = false;
+  try {
+    /*
+      ⚠ 'mismatch', not 'matched'.
+
+        My first version wrote 'matched' — which is what scenario 11 already
+        left there. The guard compares old to new and correctly says nothing
+        about a write that changes nothing, so the test passed the update
+        through and reported the guard broken. The mutation has to actually
+        mutate.
+    */
+    await q(`update public.driver_applications set identity_status = 'mismatch' where id = $1`, [
+      APPLICATION,
+    ]);
+  } catch {
+    refused = true;
+  }
+  check(
+    'a direct update is refused',
+    refused,
+    'the exemption is transaction-local and set inside the function; a client update never has it',
+  );
+
+  refused = false;
+  try {
+    await q(`update public.photo_capture_sessions set identity_status = 'mismatch' where id = $1`, [
+      SESSION,
+    ]);
+  } catch {
+    refused = true;
+  }
+  check('and so is one against the session', refused);
+});
+
+await run('scenario 13 — the copy is scoped to the caller on both sides', async () => {
+  const OTHER_APP = '55555555-5555-5555-5555-555555555555';
+  await signIn(BOLA);
+  await q('insert into public.driver_applications (id, user_id) values ($1, $2)', [
+    OTHER_APP,
+    BOLA,
+  ]);
+
+  let refused = false;
+  try {
+    await q('select public.attach_identity_result($1, $2)', [OTHER_APP, SESSION]);
+  } catch {
+    refused = true;
+  }
+  check(
+    'somebody else session cannot be claimed',
+    refused,
+    'definer means RLS is not doing this for us',
+  );
+
+  await signIn(ALICE);
+  refused = false;
+  try {
+    await q('select public.attach_identity_result($1, $2)', [OTHER_APP, SESSION]);
+  } catch {
+    refused = true;
+  }
+  check('and a verdict cannot be stamped on somebody else application', refused);
+
+  const other = (await q('select * from public.driver_applications where id = $1', [OTHER_APP]))[0];
+  check('which is left untouched', other.identity_status === null);
+});
+
+await run('scenario 14 — nothing to copy is not an error', async () => {
+  const BLANK = '66666666-6666-6666-6666-666666666666';
+  const APP = '77777777-7777-7777-7777-777777777777';
+  await signIn(ALICE);
+  await q('insert into public.photo_capture_sessions (id, owner_id) values ($1, $2)', [
+    BLANK,
+    ALICE,
+  ]);
+  await q('insert into public.driver_applications (id, user_id) values ($1, $2)', [APP, ALICE]);
+
+  await q('select public.attach_identity_result($1, $2)', [APP, BLANK]);
+
+  const app = (await q('select * from public.driver_applications where id = $1', [APP]))[0];
+  check(
+    'an unchecked session leaves the application alone rather than raising',
+    app.identity_status === null,
+    'no Dojah credentials on a deployment must not mean nobody can apply',
   );
 });
 
@@ -312,6 +520,8 @@ if (failures > 0) {
 console.log(
   'PASS — a sender onboards once and is asked for a selfie thereafter, a mismatch flags\n' +
     '       without blocking and without enrolling the unmatched face, a provider outage\n' +
-    '       decides nothing, re-running onboarding clears the old verdict, and neither the\n' +
-    '       NIN nor a photo path reaches a log or an admin queue.',
+    '       decides nothing, re-running onboarding clears the old verdict, neither the NIN\n' +
+    '       nor a photo path reaches a log or an admin queue, and a driver verdict recorded\n' +
+    '       before the application existed still reaches the reviewer without letting the\n' +
+    '       applicant write it themselves.',
 );

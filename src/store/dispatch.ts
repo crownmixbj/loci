@@ -486,8 +486,9 @@ export function matchStatusLabel(status: MatchStatus): string {
         : `Listening on ${status.journeys} journeys`;
     case 'idle':
       // Not "no matches" — there is nothing to match against, and the fix is a
-      // journey rather than patience.
-      return 'Schedule a journey to get trips';
+      // declared trip rather than patience. Named after the button that does
+      // it, so the hint and the control a driver has to find agree.
+      return 'Use Setup Trip to get offers';
   }
 }
 

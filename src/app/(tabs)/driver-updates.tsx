@@ -12,6 +12,7 @@ import {
 import { useCallback, useEffect, useState } from 'react';
 import { ActivityIndicator, ScrollView, StyleSheet, Text, View } from 'react-native';
 
+import { Footer } from '@/components/Footer';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
@@ -287,6 +288,7 @@ function Shell({ children }: { children: React.ReactNode }) {
         />
         {children}
       </View>
+      <Footer />
     </ScrollView>
   );
 }

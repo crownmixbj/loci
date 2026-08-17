@@ -59,7 +59,16 @@ const PURPOSE_COPY: Record<PhotoPurpose, { title: string; body: string; why: str
   sender: {
     title: 'Photo of you, before you post',
     body: 'Every LOCI parcel carries a photo of the person who sent it. It is stored privately, visible only to you and to LOCI staff — never to the driver.',
-    why: 'Drivers carry parcels from strangers. A record of who posted each one protects them and deters prohibited items. It is a photo record, not an identity check — LOCI does not match your face against any document or database.',
+    /*
+      ⚠ This used to end "It is a photo record, not an identity check — LOCI
+        does not match your face against any document or database."
+
+        True when it was written, and false now: the sender photo is compared
+        with the photo on the NIN record, exactly as the driver's is. Leaving
+        the old sentence in place would have been the most misleading kind of
+        privacy copy — a specific, reassuring denial of the thing being done.
+    */
+    why: 'Drivers carry parcels from strangers. A record of who posted each one protects them and deters prohibited items. Your photo is also compared with the one on your NIN record; if it does not match, your parcel still goes ahead and a person reviews it.',
   },
   driver: {
     title: 'Photo of you, to finish your application',
@@ -80,10 +89,20 @@ export function SenderPhotoSheet({
   onDone,
   busy,
   purpose = 'sender',
+  confirmLabel = 'Use this photo',
 }: {
   visible: boolean;
   onCancel: () => void;
   purpose?: PhotoPurpose;
+  /**
+   * What pressing the accept button does, in the caller's words.
+   *
+   * ⚠ This was hard-coded to "Post parcel", and the driver application used
+   *   the same sheet — so an applicant finishing a job application was asked to
+   *   press a button offering to post a parcel. A label that describes an
+   *   action the caller is not taking is worse than a vague one.
+   */
+  confirmLabel?: string;
   /**
    * Either a local image uri (native, or the browser camera) or a completed
    * capture session id (the phone took it). Never null — the photo is required.
@@ -271,14 +290,14 @@ export function SenderPhotoSheet({
         {/* ---------- the controls ---------- */}
         {handedOff ? (
           <Button
-            label={busy ? 'Posting…' : 'Post parcel'}
+            label={busy ? 'Checking…' : confirmLabel}
             onPress={() => sessionId && onDone({ sessionId })}
             disabled={busy || !sessionId}
           />
         ) : uri ? (
           <>
             <Button
-              label={busy ? 'Posting…' : 'Use this photo & post'}
+              label={busy ? 'Checking…' : confirmLabel}
               onPress={() => onDone({ uri })}
               disabled={busy}
             />

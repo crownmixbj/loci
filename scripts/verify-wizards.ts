@@ -305,10 +305,23 @@ check(
     driver,
   ),
 );
+/*
+ * Matched loosely on purpose.
+ *
+ * The gate has grown a third term — the live photo — and will plausibly grow a
+ * fourth. What this check is for is that ticking the box is *necessary*, not
+ * that the expression has a particular shape, so it asserts `!confirmed` is in
+ * the disabled expression and leaves the rest of it alone.
+ */
 check(
   'and gates Submit',
-  /disabled=\{isSubmitting \|\| !confirmed/.test(code(driver)),
+  /disabled=\{[\s\S]{0,120}!confirmed/.test(code(driver)),
   'the checkbox is the whole point of the last step',
+);
+check(
+  'as does the live photo',
+  /disabled=\{[\s\S]{0,120}!photoSession/.test(code(driver)),
+  'an application with no selfie is one nobody can match against a NIN',
 );
 
 check(
@@ -319,7 +332,12 @@ check(
 );
 check(
   'and gates Post parcel',
-  /onPress=\{handleSubmit\}\s*\n\s*disabled=\{!confirmed\}/.test(code(book)),
+  /onPress=\{handleSubmit\}\s*\n\s*disabled=\{!confirmed/.test(code(book)),
+);
+check(
+  'as does the live photo',
+  /disabled=\{[\s\S]{0,120}!photoSession/.test(code(book)),
+  'every LOCI parcel is supposed to carry a photo of whoever posted it',
 );
 
 /*

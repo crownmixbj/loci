@@ -596,11 +596,27 @@ check(
 
 /*
  * Ordering. The photo is asked for last and attached after the parcel exists.
+ *
+ * ⚠ This used to read `validate(...) < setPhotoOpen(true)`, because the sheet
+ *   opened inside the submit handler. The capture is now an item on page three
+ *   instead, so the same principle — never ask for a face before the sender
+ *   knows what they are getting — is asserted against where the card sits on
+ *   the page rather than where a function is called.
  */
 check(
-  'the photo is captured after the form validates',
-  bookBody.indexOf('validate(form, allHubs)') < bookBody.indexOf('setPhotoOpen(true)'),
+  'the photo is asked for after the fare is on screen',
+  bookBody.indexOf('Estimated total') < bookBody.indexOf('<LiveSelfieCard'),
   'asking for a face before the fare is known is asking for a face in exchange for nothing',
+);
+check(
+  'and only on the last step',
+  bookBody.indexOf('{step === 2 &&') < bookBody.indexOf('<LiveSelfieCard'),
+  'pages one and two are still unvalidated at that point',
+);
+check(
+  'the parcel cannot be posted without one',
+  /disabled=\{!confirmed \|\| !photoSession \|\| posting\}/.test(bookBody),
+  'the sheet used to be the only path to the post, so backing out was the only refusal',
 );
 check(
   'and the session is spent after the booking row exists',

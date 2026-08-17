@@ -94,7 +94,7 @@ const DRIVER_TABS: Tab[] = [
   },
   {
     key: 'find',
-    label: 'Schedule My Journey',
+    label: 'Setup Trip',
     href: '/available-packages',
     icon: (color, size) => <PackageSearch color={color} size={size} />,
   },

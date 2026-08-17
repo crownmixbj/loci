@@ -83,8 +83,54 @@ for (const entry of signup.matchAll(
   if (!clientPolicy.has(entry[1])) clientPolicy.set(entry[1], entry[2]);
 }
 
-check('the SQL policy table parsed', sqlPolicy.size === 5, `${sqlPolicy.size} kinds`);
-check('the client policy parsed', clientPolicy.size === 5, `${clientPolicy.size} documents`);
+check('the SQL policy table parsed', sqlPolicy.size === 6, `${sqlPolicy.size} kinds`);
+check('the client policy parsed', clientPolicy.size === 6, `${clientPolicy.size} documents`);
+
+/*
+ * The licence is two uploads, and only the front carries the date.
+ *
+ * Both faces are needed — the back holds the class and the endorsements — but a
+ * card has one expiry printed on one side. Asking for it twice invites two
+ * different answers, and the row that decides whether dispatch stops would then
+ * depend on which one the driver typed more carefully.
+ */
+check(
+  'the licence has a front and a back slot',
+  sqlPolicy.has('license') && sqlPolicy.has('licenseBack'),
+  [...sqlPolicy.keys()].join(', '),
+);
+check(
+  'and only the front asks for the expiry date',
+  sqlPolicy.get('licenseBack')?.allowed === false && sqlPolicy.get('license')?.required === true,
+  'one card, one date — two fields for it is two chances to disagree',
+);
+check(
+  'the back does not block dispatch on its own',
+  sqlPolicy.get('licenseBack')?.blocks === false,
+  'it has no date to lapse, so it can only ever block by accident',
+);
+
+/*
+ * Both government-ID slots are NIN, and the form has to say so.
+ *
+ * A slot labelled "government ID" collects passports, voter cards and driving
+ * licences, and the NIN match at verification then fails against a number the
+ * driver did give us — a rejection they cannot act on because nothing told them
+ * which document was wanted.
+ */
+for (const [key, whose] of [
+  ['id', "the driver's"],
+  ['guarantorId', "the guarantor's"],
+] as const) {
+  // Labels are written with either quote — "Guarantor's NIN slip" cannot use
+  // single ones. Matching only `'` walked past this entry into the next one.
+  const label = new RegExp(`key: '${key}',\\s*\\n\\s*label: (['"])(.*?)\\1`).exec(signup)?.[2];
+  check(
+    `${whose} ID slot names NIN in the label`,
+    /NIN/.test(label ?? ''),
+    `label reads: ${label ?? '(not found)'}`,
+  );
+}
 
 check(
   'every document the form uploads exists in the policy table',

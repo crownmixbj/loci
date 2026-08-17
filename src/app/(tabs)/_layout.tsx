@@ -42,7 +42,7 @@ export default function TabLayout() {
         }}>
         <Tabs.Screen name="index" options={{ title: 'Home' }} />
         <Tabs.Screen name="book" options={{ title: 'Send Parcel' }} />
-        <Tabs.Screen name="available-packages" options={{ title: 'Schedule My Journey' }} />
+        <Tabs.Screen name="available-packages" options={{ title: 'Setup Trip' }} />
         <Tabs.Screen name="driver" options={{ title: 'Assigned Trip' }} />
         <Tabs.Screen name="driver-wallet" options={{ title: 'Driver Wallet' }} />
         <Tabs.Screen name="driver-signup" options={{ title: 'Drivers' }} />

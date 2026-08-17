@@ -3,6 +3,7 @@ import { PackageSearch } from 'lucide-react-native';
 import { useEffect, useMemo, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
+import { Footer } from '@/components/Footer';
 import { RoutePill } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
@@ -105,6 +106,7 @@ export default function MyPackagesScreen() {
           message="Your sent parcels and the jobs you're carrying live on your account, so they follow you to any device."
           next="/my-packages"
         />
+        <Footer />
       </ScrollView>
     );
   }
@@ -184,6 +186,7 @@ export default function MyPackagesScreen() {
           )}
         </>
       )}
+      <Footer />
     </ScrollView>
   );
 }

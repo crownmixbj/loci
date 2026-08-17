@@ -2,6 +2,7 @@ import { useRouter } from 'expo-router';
 import { ChevronRight, Mail, Phone, ShieldQuestion, TriangleAlert } from 'lucide-react-native';
 import { Linking, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
+import { Footer } from '@/components/Footer';
 import { Card } from '@/components/ui/card';
 import { showDialog } from '@/components/ui/dialog';
 import { screenPadding, ScreenHeader, SectionLabel } from '@/components/ui/screen';
@@ -125,6 +126,7 @@ export default function SupportScreen() {
           answered in working hours and a parcel is not.
         </Text>
       </View>
+      <Footer />
     </ScrollView>
   );
 }

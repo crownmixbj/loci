@@ -121,13 +121,37 @@ create table if not exists public.document_kinds (
     The label is what a Nigerian driver reads, so that stays British. Renaming
     the key is a data migration, not a spelling fix, and is not worth doing.
 */
+/*
+  ⚠ The licence is two rows, and only the front one gates anything.
+
+    The back carries the expiry date and the vehicle class, so it is required
+    evidence — but `blocks_dispatch` and `expiry_allowed` are both false on it.
+    One licence has one expiry, recorded on the front row, which is the row that
+    stops a driver working. Marking both blocking would idle somebody twice over
+    one card; giving both a date would give LOCI two answers to reconcile.
+
+  ⚠ The government ID slots are NIN only now.
+
+    They used to accept a passport or a voter's card. Only the NIN is checked
+    against a government record — `verify-liveness` matches a selfie against the
+    NIMC photo for the applicant's NIN — so anything else in that slot was a
+    document nobody could verify.
+
+  ⚠ Comments belong OUT here, not between the value rows.
+
+    `scripts/pg/documents-harness.mjs` extracts this statement by slicing to the
+    first semicolon. A comment inside it containing one truncates the insert, and
+    the harness then fails on an unterminated block comment rather than on
+    anything real. Cheap to avoid, confusing to diagnose.
+*/
 insert into public.document_kinds (key, label, expiry_required, expiry_allowed, blocks_dispatch, sort_order)
 values
-  ('license',     'Driver''s licence',            true,  true,  true,  1),
-  ('insurance',   'Car insurance',                true,  true,  true,  2),
-  ('id',          'Driver''s government ID',      false, false, false, 3),
-  ('guarantorId', 'Guarantor''s government ID',   false, false, false, 4),
-  ('vehicle',     'Vehicle picture',              false, false, false, 5)
+  ('license',     'Driver''s licence (front)',    true,  true,  true,  1),
+  ('licenseBack', 'Driver''s licence (back)',     false, false, false, 2),
+  ('insurance',   'Car insurance',                true,  true,  true,  3),
+  ('id',          'Your NIN slip',                false, false, false, 4),
+  ('guarantorId', 'Guarantor''s NIN slip',        false, false, false, 5),
+  ('vehicle',     'Vehicle picture',              false, false, false, 6)
 on conflict (key) do update set
   label = excluded.label,
   expiry_required = excluded.expiry_required,

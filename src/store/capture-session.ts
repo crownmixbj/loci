@@ -338,6 +338,30 @@ export async function runIdentityCheck(sessionId: string, nin: string): Promise<
 }
 
 /**
+ * Copies the verdict from the session onto the application just created.
+ *
+ * ⚠ Without this the verdict is lost, and silently.
+ *
+ *   `verify-identity` runs while the applicant is still on page three, so there
+ *   is no application row for it to write to yet — it records the answer on the
+ *   capture session instead. This is the call that brings it across, and it is
+ *   the reason a reviewer sees a check result rather than four nulls.
+ *
+ * Never throws. A failure here costs the reviewer a data point on an
+ * application that has already been submitted; raising would show the applicant
+ * an error about work that succeeded.
+ */
+export async function attachIdentityResult(
+  applicationId: string,
+  sessionId: string,
+): Promise<void> {
+  await supabase.rpc('attach_identity_result', {
+    application_id: applicationId,
+    session_id: sessionId,
+  });
+}
+
+/**
  * What the applicant is told.
  *
  * A mismatch is deliberately not phrased as an accusation or a rejection. The

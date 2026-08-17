@@ -9,7 +9,7 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-import { tabsAreRoutable } from '../src/components/ui/bottom-tab-bar';
+import { tabsAreRoutable, tabsFor } from '../src/components/ui/bottom-tab-bar';
 import {
   EXPERIENCES,
   EXPERIENCE_HOME,
@@ -197,11 +197,23 @@ check(
   'the sender tabs match the mockup',
   ['New Shipment', 'My Shipments', 'Account'].every((label) => tabs.includes(label)),
 );
+/*
+ * Asserted on hrefs, not labels.
+ *
+ * This check used to name 'Schedule My Journey', so renaming that tab to 'Trip
+ * Setup' failed it — while the thing it exists to protect, that a driver is
+ * never handed the booking form, was never touched. Labels are copy; the route
+ * list is the rule.
+ */
+const driverHrefs = tabsFor('driver').map((tab) => tab.href);
 check(
-  'the driver gets its own three',
-  tabs.includes('Assigned Trip') &&
-    tabs.includes('Schedule My Journey') &&
-    !tabs.includes("label: 'New Shipment',\n    href: '/driver'"),
+  'the driver tabs cover the work, the board and the money',
+  ['/driver', '/available-packages', '/driver-wallet'].every((href) => driverHrefs.includes(href)),
+  driverHrefs.join(', '),
+);
+check(
+  'and never the booking form',
+  !driverHrefs.includes('/book'),
   'a driver has no booking form in their experience at all',
 );
 check(
