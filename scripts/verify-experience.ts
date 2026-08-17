@@ -9,6 +9,7 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
+import { tabsAreRoutable } from '../src/components/ui/bottom-tab-bar';
 import {
   EXPERIENCES,
   EXPERIENCE_HOME,
@@ -147,7 +148,24 @@ check(
   'a driver on the booking form goes to their portal',
   redirectFor('/book', 'driver') === '/driver',
 );
-check('a sender on the portal goes home', redirectFor('/driver', 'sender') === '/');
+check(
+  'a sender on the portal goes to their home',
+  redirectFor('/driver', 'sender') === '/book',
+  'the sender home is the booking form on a phone, not the marketing page',
+);
+
+/*
+ * The landing page is web-only. Without that rule a native cold start lands on
+ * the hero with no tab selected, which reads as the app failing to open.
+ */
+check('the marketing home is web-only', routeAllowed('/', 'web') && !routeAllowed('/', 'sender'));
+check('and a native cold start is moved off it', redirectFor('/', 'sender') === '/book');
+check('for a driver too', redirectFor('/', 'driver') === '/driver');
+check(
+  'the root rule matches only the root',
+  routeAllowed('/book', 'sender') && routeAllowed('/locations', 'sender'),
+  "a prefix of '/' would otherwise swallow every route in the app",
+);
 check(
   'nothing happens while auth is restoring',
   redirectFor('/driver', null) === null,
@@ -169,6 +187,43 @@ for (const experience of EXPERIENCES) {
     );
   }
 }
+
+// ------------------------------------------------------ the tab bar --------
+
+const tabs = read('src/components/ui/bottom-tab-bar.tsx');
+const header = read('src/components/ui/sticky-header.tsx');
+
+check(
+  'the sender tabs match the mockup',
+  ['New Shipment', 'My Shipments', 'Account'].every((label) => tabs.includes(label)),
+);
+check(
+  'the driver gets its own three',
+  tabs.includes('Assigned Trip') &&
+    tabs.includes('Schedule My Journey') &&
+    !tabs.includes("label: 'New Shipment',\n    href: '/driver'"),
+  'a driver has no booking form in their experience at all',
+);
+check(
+  'web shows no tab bar',
+  tabs.includes("if (experience === 'driver') return DRIVER_TABS") && tabs.includes('return [];'),
+  'the capsule carries navigation there',
+);
+check(
+  'the desktop header is hidden on a phone',
+  header.includes("if (experience && experience !== 'web') return null"),
+  'the capsule collapses to a hamburger, which buries every destination',
+);
+check(
+  'the tab bar clears the home indicator',
+  tabs.includes('insets.bottom > 0 ? insets.bottom'),
+  'without it the labels sit under the iPhone home bar',
+);
+check(
+  'the active tab is not marked by colour alone',
+  tabs.includes('the label is always visible'),
+  'the tinted pill is 1.15:1 on the bar',
+);
 
 // ------------------------------------------------- one rule, two readers ----
 
@@ -197,10 +252,89 @@ check(
   'the route they are leaving does not exist for them',
 );
 
+// -------------------------------------------------- switching the view -----
+
+const settings = read('src/components/ui/settings-menu.tsx');
+/** Prettier wraps JSX text, so a phrase can be split across lines in the source. */
+const flat = (source: string) => source.replace(/\s+/g, ' ');
+const session = read('src/store/session.tsx');
+
 check(
-  'the Sender/Driver toggle is hidden from people who are not both',
-  nav.includes('!(isApprovedDriver && experience !== ') && nav.includes('styles.hidden'),
-  'a switch whose only effect is a screen of empty states',
+  'there is one place to switch, not two',
+  settings.includes("choose('driver')") &&
+    !nav.includes('SESSION_ROLES') &&
+    !nav.includes('styles.segmented'),
+  'the old segmented control moved into the sheet; two controls drift apart',
+);
+check(
+  'the gear opens it',
+  nav.includes('setSettingsOpen(true)') && nav.includes('<Settings color'),
+);
+check(
+  'and so does the avatar, rather than raising a second panel',
+  nav.includes('const openAccountMenu = () => setSettingsOpen(true)'),
+  'the old avatar dialog was three quarters of this sheet',
+);
+check(
+  'only an approved driver is offered the choice',
+  settings.includes("const canSwitch = isApprovedDriver && experience !== 'web'"),
+  'the toggle is a preference, and offering it to a sender shows empty screens',
+);
+check(
+  'and the web dashboard explains why it has none',
+  flat(settings).includes('nothing to switch between'),
+  'an approved driver would otherwise hunt for a control that is deliberately absent',
+);
+check(
+  'switching navigates to the new home rather than staying put',
+  settings.includes('router.replace(EXPERIENCE_HOME['),
+  'the guard would move them anyway; doing it here reads as arriving, not being thrown',
+);
+check(
+  'selection is not carried by colour alone',
+  settings.includes('{selected && <Check'),
+  'the tinted fill is 1.15:1 against the sheet, and colour alone fails WCAG 1.4.1',
+);
+
+// ---------------------------------------------------------- persistence ----
+
+check(
+  'the chosen view is stored per account',
+  session.includes('const activeViewKey = (userId: string) => `loci.activeView.${userId}`'),
+  "one shared key hands the next person on a shared device the last one's interface",
+);
+check(
+  'it is restored when the person changes',
+  session.includes('restoredViewFor') && session.includes('[user?.id, initialRole]'),
+);
+check(
+  'but not re-read on every token refresh',
+  !session.includes('}, [user, initialRole]);'),
+  '`user` gets a new identity hourly',
+);
+check(
+  'signing out forgets it',
+  session.includes('AsyncStorage.removeItem(activeViewKey(user.id))'),
+);
+check(
+  'the write does not block the switch',
+  /setRoleState\(next\);\s*\n\s*if \(user\) void AsyncStorage\.setItem/.test(session),
+  'a view preference is not worth a spinner',
+);
+
+/*
+ * The case that matters most: someone whose approval is revoked while their
+ * stored preference still says 'driver'. Nothing in the persistence layer
+ * validates that — it does not need to, because the resolver already refuses.
+ */
+check(
+  'a stored driver view cannot strand a revoked driver',
+  at({ role: 'driver', isApprovedDriver: false }) === 'sender',
+  'a banned driver reopening the app must land somewhere usable',
+);
+check(
+  'and the guard then moves them off the portal',
+  redirectFor('/driver', at({ role: 'driver', isApprovedDriver: false })) === '/book',
 );
 
 /*
@@ -208,6 +342,13 @@ check(
  * say so — the next person to read it will otherwise assume the driver screens
  * are protected by it.
  */
+/*
+ * Every tab must point somewhere its own experience allows, or the guard
+ * bounces the person straight back off a tab they just tapped.
+ */
+check('sender tabs are all routable in the sender experience', tabsAreRoutable('sender'));
+check('driver tabs are all routable in the driver experience', tabsAreRoutable('driver'));
+
 check(
   'the module states it is not a security boundary',
   read('src/lib/experience.ts').includes('not a security boundary'),
@@ -220,6 +361,8 @@ if (failures > 0) {
 
 console.log(
   'PASS — web resolves before role, an unapproved toggle never yields the driver app,\n' +
+    '       the view switch lives in one place and is stored per account, a revoked\n' +
+    '       driver cannot be stranded by a stale preference,\n' +
     '       nothing resolves while auth restores, /driver-signup stays open to senders,\n' +
     '       admin works on every device, every redirect lands somewhere allowed, and the\n' +
     '       navigation and the guard read one shared rule.',

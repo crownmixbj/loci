@@ -39,14 +39,22 @@ export type Service = {
   ctaLabel: string;
 };
 
-/** Worked example: a 2 kg parcel across town, hub to hub. */
+/*
+ * Worked example: a 2 kg parcel across town, on the cheapest route.
+ *
+ * `estimateFee` defaults both ends to `CHEAPEST_HANDOVER`, which is now a
+ * public-location pickup met at a hub — no longer "hub to hub", because a hub
+ * pickup carries the surcharge. The wording below says "collected and met in
+ * public" for that reason: describing this as hub-to-hub would understate what
+ * a hub-to-hub parcel actually costs by ₦800.
+ */
 const localExample = estimateFee({
   deliveryType: 'local',
   weight: 2,
   declaredValue: 0,
 });
 
-/** Worked example: a 5 kg parcel Ibadan → Lagos, hub to hub. */
+/** Worked example: a 5 kg parcel Ibadan → Lagos, on the same cheapest route. */
 const interstateExample = estimateFee({
   deliveryType: 'interstate',
   weight: 5,
@@ -58,7 +66,7 @@ export const SERVICES: Record<ServiceId, Service> = {
     id: 'same-day-local',
     chipLabel: 'Local Delivery',
     title: 'Local Delivery',
-    tagline: 'Within one city, hub to hub or all the way to the door.',
+    tagline: 'Within one city, met in public or all the way to the door.',
     tone: 'success',
     facts: [
       { label: 'Pickup window', value: 'As requested' },
@@ -76,7 +84,7 @@ export const SERVICES: Record<ServiceId, Service> = {
       },
       {
         heading: 'Pricing',
-        body: `Base fare ${formatNaira(PRICING.base.local)} plus ${formatNaira(PRICING.perKg.local)} per kilogram. A 2 kg parcel across town, hub to hub, works out at about ${formatNaira(localExample.total)}. Doorstep pickup or delivery adds ${formatNaira(PRICING.doorstepSurcharge)} per leg. Fragile handling is free.`,
+        body: `Base fare ${formatNaira(PRICING.base.local)} plus ${formatNaira(PRICING.perKg.local)} per kilogram. A 2 kg parcel across town, collected and met in public, works out at about ${formatNaira(localExample.total)}. Bringing the parcel to a hub, or having it delivered to a door, each add ${formatNaira(PRICING.handoverSurcharge)}. Fragile handling is free.`,
       },
     ],
     prefill: { deliveryType: 'local' },
@@ -105,7 +113,7 @@ export const SERVICES: Record<ServiceId, Service> = {
       },
       {
         heading: 'Pricing',
-        body: `Base fare ${formatNaira(PRICING.base.interstate)} plus ${formatNaira(PRICING.perKg.interstate)} per kilogram. A 5 kg parcel Ibadan → Lagos, hub to hub, works out at about ${formatNaira(interstateExample.total)}. Doorstep pickup or delivery adds ${formatNaira(PRICING.doorstepSurcharge)} per leg.`,
+        body: `Base fare ${formatNaira(PRICING.base.interstate)} plus ${formatNaira(PRICING.perKg.interstate)} per kilogram. A 5 kg parcel Ibadan → Lagos, collected and met in public, works out at about ${formatNaira(interstateExample.total)}. Bringing the parcel to a hub, or having it delivered to a door, each add ${formatNaira(PRICING.handoverSurcharge)}.`,
       },
     ],
     prefill: { deliveryType: 'interstate' },

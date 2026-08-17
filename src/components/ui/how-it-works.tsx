@@ -14,7 +14,7 @@ import {
 
 import { PROCESS_STEPS, type ProcessStep } from '@/constants/how-it-works-steps';
 import { STEP_ILLUSTRATIONS, STEP_ILLUSTRATION_HEIGHT } from '@/constants/step-illustrations';
-import {FontSize, Radius, Spacing, Typography, font } from '@/constants/theme';
+import { FontSize, Radius, Spacing, Typography, font } from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';
 
 /**

@@ -3,6 +3,7 @@ import { MailCheck } from 'lucide-react-native';
 import { useEffect, useState } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 
+import { errorMessage } from '@/lib/errors';
 import { AuthFooterLink, AuthShell } from '@/components/ui/auth-shell';
 import { Button } from '@/components/ui/button';
 import { ValidatedEmailInput } from '@/components/ValidatedEmailInput';
@@ -52,7 +53,7 @@ export default function ForgotPasswordScreen() {
     try {
       result = await requestPasswordReset(email);
     } catch (thrown) {
-      result = { error: thrown instanceof Error ? thrown.message : 'Something went wrong.' };
+      result = { error: errorMessage(thrown, 'Something went wrong.') };
     } finally {
       setPending(false);
     }

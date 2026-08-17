@@ -1,5 +1,6 @@
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import {
+  Ban,
   Bike,
   CircleCheckBig,
   ClipboardList,
@@ -23,15 +24,17 @@ import { Badge, RoutePill } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { EmptyState } from '@/components/ui/screen';
+import { CancelAction } from '@/components/ui/cancel-action';
 import { MapView, type MapMarker } from '@/components/ui/map-view';
 import { StickyHeaderScreen } from '@/components/ui/sticky-header';
-import {FontSize, MaxContentWidth, Radius, Spacing, Typography, font } from '@/constants/theme';
+import { FontSize, MaxContentWidth, Radius, Spacing, Typography, font } from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';
 import {
   BOOKING_STAGES,
   estimateFee,
   formatBookingDate,
   formatNaira,
+  handoverFeeLabel,
   routeLabel,
   stageIndex,
   statusLabel,
@@ -47,6 +50,9 @@ const STAGE_ICONS: Record<BookingStage, typeof Truck> = {
   'In Transit': Truck,
   'Out for Delivery': Bike,
   Delivered: House,
+  // Not a stage on the journey, but the map has to be total — a parcel a sender
+  // called off still appears in their list and still needs an icon.
+  Cancelled: Ban,
 };
 
 export default function ParcelDetailScreen() {
@@ -248,10 +254,10 @@ export default function ParcelDetailScreen() {
             <CostRow label="Base fare" value={fee.base} />
             <CostRow label="Weight" value={fee.weight} />
             <CostRow label="Insurance" value={fee.insurance} />
-            {fee.doorstep > 0 && (
+            {fee.handover > 0 && (
               <CostRow
-                label={`Doorstep · ${fee.doorstepLegs === 2 ? 'pickup and delivery' : 'one leg'}`}
-                value={fee.doorstep}
+                label={handoverFeeLabel(booking.pickupMode, booking.dropoffMode)}
+                value={fee.handover}
               />
             )}
 
@@ -267,6 +273,13 @@ export default function ParcelDetailScreen() {
               </Text>
             </View>
           </Card>
+
+          {/*
+            Calling it off lives here rather than on the list card: it is
+            irreversible for a sender, and a destructive control one tap from a
+            scrolling list is a control people hit by accident.
+          */}
+          <CancelAction booking={booking} />
 
           <Button label="Close" variant="secondary" onPress={() => router.back()} />
         </View>

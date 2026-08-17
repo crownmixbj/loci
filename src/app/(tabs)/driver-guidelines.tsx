@@ -79,7 +79,7 @@ export default function DriverGuidelinesScreen() {
             />
           )}
           <Button
-            label="Find open jobs"
+            label="Schedule a journey"
             variant="secondary"
             icon={(color, size) => <PackageSearch color={color} size={size} />}
             onPress={() => router.navigate('/available-packages')}

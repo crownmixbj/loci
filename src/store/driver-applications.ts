@@ -27,6 +27,13 @@ export type DriverApplication = {
   baseCity: string | null;
 
   vehicleType: string;
+  /**
+   * Added by `29_driver_profile_edits.sql`, so it is absent on every row
+   * created before it. Nullable rather than `string` for that reason — an
+   * application submitted last month genuinely has no colour, and defaulting it
+   * to `''` here would make "not recorded" indistinguishable from "cleared".
+   */
+  vehicleColour: string | null;
   plateNumber: string;
   licenseId: string;
 
@@ -84,6 +91,7 @@ export function rowToApplication(row: Row): DriverApplication {
     state: str(row.state),
     baseCity: nullableStr(row.base_city),
     vehicleType: str(row.vehicle_type),
+    vehicleColour: nullableStr(row.vehicle_colour),
     plateNumber: str(row.plate_number),
     licenseId: str(row.license_id),
     guarantorName: str(row.guarantor_name),
@@ -108,9 +116,19 @@ export function rowToApplication(row: Row): DriverApplication {
   };
 }
 
+/*
+  The signup form does not ask for vehicle colour.
+
+  It is a post-approval detail — useful to a hub steward identifying a bike at a
+  gate, not to a reviewer deciding whether to approve one — so `vehicleColour`
+  is omitted here and added later from the profile editor. Requiring it at
+  submission would put a field in the longest form in the app for the sake of a
+  value nobody needs until the driver is already working.
+*/
 export type NewApplication = Omit<
   DriverApplication,
   | 'id'
+  | 'vehicleColour'
   | 'status'
   | 'reviewNote'
   | 'reviewedBy'
@@ -328,4 +346,121 @@ export function statusChangeMessage(
       // Going back to pending is an admin correcting themselves; not news.
       return null;
   }
+}
+
+// ------------------------------------------------ payout account changes ----
+
+export type PayoutChange = {
+  id: string;
+  bankName: string;
+  accountNumber: string;
+  accountName: string;
+  previousBankName: string | null;
+  previousAccountNumber: string | null;
+  status: 'pending' | 'applied' | 'cancelled';
+  requestedAt: string;
+  effectiveAt: string;
+};
+
+/**
+ * Changing where a driver's money goes.
+ *
+ * Deliberately slow. An attacker with a driver's password can change a payout
+ * account in seconds and take the next transfer; a 48-hour window gives the real
+ * driver two days to notice, and the *old* account keeps receiving transfers
+ * throughout — so the theft window never opens at all.
+ *
+ * The rules are in `supabase/16_driver_identity.sql`. There is no client write
+ * path to `payout_change_requests`: a driver who could write the row could set
+ * `effective_at` to now and skip the wait entirely.
+ */
+export const PAYOUT_COOLING_HOURS = 48;
+
+type PayoutRow = {
+  id: string;
+  bank_name: string;
+  account_number: string;
+  account_name: string;
+  previous_bank_name: string | null;
+  previous_account_number: string | null;
+  status: string;
+  requested_at: string;
+  effective_at: string;
+};
+
+const toPayoutChange = (row: PayoutRow): PayoutChange => ({
+  id: row.id,
+  bankName: row.bank_name,
+  accountNumber: row.account_number,
+  accountName: row.account_name,
+  previousBankName: row.previous_bank_name,
+  previousAccountNumber: row.previous_account_number,
+  status: row.status as PayoutChange['status'],
+  requestedAt: row.requested_at,
+  effectiveAt: row.effective_at,
+});
+
+export async function fetchPayoutChanges(): Promise<PayoutChange[]> {
+  const { data, error } = await supabase
+    .from('payout_change_requests')
+    .select('*')
+    .order('requested_at', { ascending: false });
+
+  if (error || !data) return [];
+  return (data as PayoutRow[]).map(toPayoutChange);
+}
+
+export async function requestPayoutChange(input: {
+  bankName: string;
+  accountNumber: string;
+  accountName: string;
+}): Promise<{ ok: true; effectiveAt: string } | { ok: false; error: string }> {
+  const { data, error } = await supabase.rpc('request_payout_change', {
+    new_bank_name: input.bankName,
+    new_account_number: input.accountNumber,
+    new_account_name: input.accountName,
+  });
+
+  if (error) return { ok: false, error: error.message };
+  return { ok: true, effectiveAt: String(data) };
+}
+
+export async function cancelPayoutChange(id: string): Promise<boolean> {
+  const { error } = await supabase.rpc('cancel_payout_change', { request_id: id });
+  return !error;
+}
+
+/**
+ * How long until a pending change takes effect.
+ *
+ * Rounded up, always. "In 1 hour" when 61 minutes remain is a small lie that
+ * matters here: a driver watching a clock to know when their money moves should
+ * never find it has not moved when the app said it would have.
+ */
+export function hoursUntil(effectiveAt: string, now: Date = new Date()): number {
+  const remaining = Date.parse(effectiveAt) - now.getTime();
+  return remaining > 0 ? Math.ceil(remaining / 3_600_000) : 0;
+}
+
+export function payoutChangeLabel(change: PayoutChange, now: Date = new Date()): string {
+  if (change.status === 'applied') return 'Applied';
+  if (change.status === 'cancelled') return 'Cancelled';
+
+  const hours = hoursUntil(change.effectiveAt, now);
+  if (hours === 0) return 'Applying shortly';
+  if (hours === 1) return 'Takes effect in 1 hour';
+  return `Takes effect in ${hours} hours`;
+}
+
+/**
+ * Only the last four digits, everywhere a change is displayed.
+ *
+ * The driver knows their own account number; showing it in full adds nothing
+ * and puts it on a screen that gets read over shoulders and screenshotted into
+ * support chats.
+ */
+export function maskAccount(accountNumber: string | null): string {
+  const digits = (accountNumber ?? '').replace(/\D/g, '');
+  if (digits.length < 4) return '••••';
+  return `••••${digits.slice(-4)}`;
 }

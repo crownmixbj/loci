@@ -7,6 +7,7 @@ import {
   FileText,
   LayoutDashboard,
   RefreshCw,
+  UserPen,
 } from 'lucide-react-native';
 import { useCallback, useEffect, useState } from 'react';
 import { ActivityIndicator, ScrollView, StyleSheet, Text, View } from 'react-native';
@@ -14,6 +15,8 @@ import { ActivityIndicator, ScrollView, StyleSheet, Text, View } from 'react-nat
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
+import { DocumentAlerts } from '@/components/ui/document-locker';
+import { ProfileEditSheet } from '@/components/ui/profile-edit-sheet';
 import { EmptyState, screenPadding, ScreenHeader, SectionLabel } from '@/components/ui/screen';
 import { SignedOutState } from '@/components/ui/signed-out-state';
 import { showToast } from '@/components/ui/toast';
@@ -58,6 +61,7 @@ export default function DriverUpdatesScreen() {
   const { isAuthenticated, status, application, driverStatusLoaded, refreshDriverStatus } =
     useSession();
   const [refreshing, setRefreshing] = useState(false);
+  const [editing, setEditing] = useState(false);
 
   /**
    * Which half to show, decided once and then left alone.
@@ -196,6 +200,56 @@ export default function DriverUpdatesScreen() {
         )}
       </Card>
 
+      {/*
+        ---------- Editing ----------
+
+        Approved drivers only. Before approval the whole application is still
+        editable through the form they submitted, and offering a second edit
+        path beside it would be two ways to change the same row.
+
+        A driver already back under review keeps the button: the reason they are
+        under review may be the thing they need to correct, and taking the
+        control away at exactly that moment leaves them stuck waiting for an
+        admin to ask them for it.
+      */}
+      {(application.status === 'approved' || application.status === 'under_review') && (
+        <>
+          {/*
+            ---------- Document alerts ----------
+
+            Above the editor, and only the banners.
+
+            An expired licence has stopped this driver earning, which outranks
+            every other thing on the page. The document *list* is not here — it
+            lives inside Edit your details with the rest of the submitted
+            application, because that is where somebody looks for "what did I
+            give LOCI". Status where it is seen; information where it belongs.
+          */}
+          <DocumentAlerts />
+
+          <SectionLabel>Your details</SectionLabel>
+          <Card style={styles.timelineCard}>
+            <Text style={[styles.editNote, { color: theme.textSecondary }]}>
+              Vehicle, address and next of kin save straight away. Changing your legal name, NIN,
+              licence or guarantor sends your account back for review.
+            </Text>
+            <Button
+              label="Edit profile"
+              size="md"
+              icon={(color, size) => <UserPen color={color} size={size} />}
+              onPress={() => setEditing(true)}
+            />
+          </Card>
+
+          <ProfileEditSheet
+            visible={editing}
+            application={application}
+            onClose={() => setEditing(false)}
+            onSaved={() => void refresh()}
+          />
+        </>
+      )}
+
       <View style={styles.actions}>
         <Button
           label={refreshing ? 'Checking…' : 'Check for updates'}
@@ -309,6 +363,7 @@ const styles = StyleSheet.create({
     ...Typography.meta,
     ...font(600),
   },
+  editNote: { ...Typography.caption, lineHeight: 18 },
   timelineCard: {
     gap: 0,
     marginBottom: Spacing.three,

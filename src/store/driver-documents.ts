@@ -1,4 +1,6 @@
+import { errorMessage } from '@/lib/errors';
 import { supabase } from '@/lib/supabase';
+import { readFileBytes } from '@/lib/upload';
 
 /**
  * Uploads for driver application documents.
@@ -55,9 +57,9 @@ export type UploadResult = { ok: true; path: string } | { ok: false; error: stri
 /**
  * Uploads one local file.
  *
- * React Native has no `File`, and `fetch(uri).blob()` is the supported way to
- * read a `file://` or `content://` URI on both platforms. On web the picker
- * already hands back a blob URL, so the same call works there.
+ * React Native has no `File`. `src/lib/upload.ts` explains how a local URI is
+ * read into bytes, and why it is not done with `fetch().blob()`. On web the
+ * picker hands back a blob URL, which the same reader handles unchanged.
  */
 export async function uploadDocument(args: {
   userId: string;
@@ -75,29 +77,36 @@ export async function uploadDocument(args: {
     };
   }
 
-  let blob: Blob;
+  /*
+   * ⚠ This was `fetch(uri).blob()` too.
+   *
+   *   The content type here was already correct — the picker reports it, so
+   *   this one never hit the text/plain rejection. What it shared with the
+   *   other two is the read: `Response.prototype.blob` is undefined on some
+   *   builds, which surfaces as "undefined is not a function" and no clue why.
+   *   See `src/lib/upload.ts`.
+   */
+  let bytes: ArrayBuffer;
   try {
-    const response = await fetch(uri);
-    blob = await response.blob();
-  } catch {
-    return { ok: false, error: `Could not read ${fileName} from this device.` };
+    // The picker's own content type wins; it knows better than an extension.
+    ({ bytes } = await readFileBytes(uri, contentType));
+  } catch (thrown) {
+    return {
+      ok: false,
+      error: errorMessage(thrown, `Could not read ${fileName}.`),
+    };
   }
 
-  if (blob.size > MAX_DOCUMENT_BYTES) {
+  if (bytes.byteLength > MAX_DOCUMENT_BYTES) {
     return {
       ok: false,
       error: `${fileName} is larger than ${Math.round(MAX_DOCUMENT_BYTES / 1024 / 1024)} MB.`,
     };
   }
 
-  // An empty blob usually means the URI expired between picking and submitting.
-  if (blob.size === 0) {
-    return { ok: false, error: `${fileName} came back empty. Attach it again.` };
-  }
-
   const path = documentPath(userId, key, fileName);
 
-  const { error } = await supabase.storage.from(DOCUMENTS_BUCKET).upload(path, blob, {
+  const { error } = await supabase.storage.from(DOCUMENTS_BUCKET).upload(path, bytes, {
     contentType,
     // Replace rather than fail: a second attempt at the same slot is a
     // correction, not a conflict.

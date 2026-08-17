@@ -13,6 +13,8 @@ import {
 import { useEffect, useMemo, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 
+import { Image } from 'expo-image';
+
 import { Badge, RoutePill } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
@@ -31,6 +33,7 @@ import {
   type Booking,
   type BookingStage,
 } from '@/store/bookings';
+import { signedProofUrl } from '@/store/delivery';
 import { useSession } from '@/store/session';
 
 /**
@@ -47,10 +50,11 @@ import { useSession } from '@/store/session';
  *      without an account cannot track their own delivery. That is a real gap,
  *      and the screen says so rather than pretending the ID was simply wrong.
  *
- *   2. There is no proof of delivery. Nothing in the schema records who
- *      received a parcel, when, or with what evidence — see `NoProofOfDelivery`
- *      below, which names the missing pieces instead of showing a reassuring
- *      green tick that proves nothing.
+ *   2. Proof of delivery is only as good as what the driver captured. The panel
+ *      below shows the record that exists — who took it, when, and the photo if
+ *      there is one — and says plainly when a parcel was marked delivered
+ *      without any of it. A green tick against no evidence would be a false
+ *      empty state, which is worse than an honest one.
  */
 export default function TrackingScreen() {
   const theme = useTheme();
@@ -284,7 +288,7 @@ function TrackedParcel({ booking, onOpen }: { booking: Booking; onOpen: () => vo
       )}
 
       <SectionLabel>Proof of delivery</SectionLabel>
-      <NoProofOfDelivery delivered={booking.status === 'Delivered'} />
+      <ProofOfDelivery booking={booking} />
 
       <Button label="Open full parcel details" variant="secondary" onPress={onOpen} />
     </>
@@ -301,6 +305,16 @@ function TrackedParcel({ booking, onOpen }: { booking: Booking; onOpen: () => vo
 function stageTimestamp(booking: Booking, stage: BookingStage): string | null {
   if (stage === 'Booked') return booking.createdAt;
   if (stage === 'Assigned') return booking.acceptedAt;
+  if (stage === 'Picked Up') return booking.pickedUpAt;
+  if (stage === 'Delivered') return booking.deliveredAt;
+
+  /*
+   * In Transit and Out for Delivery still have no timestamp of their own.
+   *
+   * `advance_booking` stamps only the two that matter for a dispute. Adding two
+   * more columns is cheap; inventing the times from `createdAt` to fill the gap
+   * would not be, which is why these stay null and the row simply shows no time.
+   */
   return null;
 }
 
@@ -352,60 +366,134 @@ function StageRow({
 }
 
 /**
- * There is no proof of delivery, so this says so.
+ * The proof of delivery record, or an honest account of its absence.
  *
- * The temptation on a page titled "Proof of Delivery" is to render a green tick
- * against a delivered parcel and call it proof. It would not be: nothing
- * records who took the parcel, when, or with what evidence. A sender in a
- * dispute would be shown a confident graphic backed by no data at all, which is
- * worse than an empty state — it is a false one.
+ * Three states, and they are genuinely different:
  *
- * The three missing pieces are named so the gap is actionable rather than vague.
+ *   not delivered yet   nothing has happened, so nothing is shown
+ *   delivered, evidenced  who took it, when, and the photo
+ *   delivered, bare     marked Delivered with no name and no photo
+ *
+ * The third one is the important one. It happens for every parcel that predates
+ * `supabase/10_delivery.sql`, and it will keep happening wherever a driver
+ * completes a job without signal. Rendering those the same as a fully evidenced
+ * delivery would be the exact false reassurance this panel used to warn about.
  */
-function NoProofOfDelivery({ delivered }: { delivered: boolean }) {
+function ProofOfDelivery({ booking }: { booking: Booking }) {
   const theme = useTheme();
+  const [photoUrl, setPhotoUrl] = useState<string | null>(null);
+
+  const delivered = booking.status === 'Delivered';
+  const hasRecord = Boolean(booking.deliveredAt || booking.receivedBy || booking.proofPath);
+
+  /*
+   * The bucket is private, so the photo needs a signed URL and the signature
+   * expires. Fetched on demand rather than stored on the booking: a URL cached
+   * in state outlives its signature and turns into a broken image.
+   */
+  useEffect(() => {
+    let cancelled = false;
+
+    if (!booking.proofPath) {
+      setPhotoUrl(null);
+      return;
+    }
+
+    void signedProofUrl(booking.proofPath).then((url) => {
+      if (!cancelled) setPhotoUrl(url);
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [booking.proofPath]);
+
+  if (!delivered && !hasRecord) {
+    return (
+      <Card style={styles.podCard}>
+        <View style={styles.podHead}>
+          <FileWarning color={theme.textMuted} size={18} />
+          <Text style={[styles.podTitle, { color: theme.text }]}>Not delivered yet</Text>
+        </View>
+        <Text style={[styles.podBody, { color: theme.textSecondary }]}>
+          The driver records who received the parcel — and a photo where they can — at the moment of
+          handover. Nothing has been captured for this one yet.
+        </Text>
+      </Card>
+    );
+  }
+
+  if (!hasRecord) {
+    return (
+      <Card style={styles.podCard}>
+        <View style={styles.podHead}>
+          <FileWarning color={theme.warningOnSoft} size={18} />
+          <Text style={[styles.podTitle, { color: theme.text }]}>
+            Marked delivered, but not evidenced
+          </Text>
+        </View>
+        <Text style={[styles.podBody, { color: theme.textSecondary }]}>
+          This parcel is marked Delivered but carries no handover record. Parcels completed before
+          proof of delivery was introduced look like this. If it is disputed, there is nothing here
+          to settle it.
+        </Text>
+      </Card>
+    );
+  }
 
   return (
     <Card style={styles.podCard}>
       <View style={styles.podHead}>
-        <FileWarning color={theme.warningOnSoft} size={18} />
-        <Text style={[styles.podTitle, { color: theme.text }]}>
-          {delivered ? 'Marked delivered, but not evidenced' : 'Not delivered yet'}
-        </Text>
+        <CircleCheck color={theme.success} size={18} />
+        <Text style={[styles.podTitle, { color: theme.text }]}>Handover recorded</Text>
       </View>
 
-      <Text style={[styles.podBody, { color: theme.textSecondary }]}>
-        {delivered
-          ? 'This parcel is marked Delivered, but LOCI holds no evidence of the handover. If this is disputed, there is nothing here to settle it.'
-          : 'Proof is captured at handover. Nothing has been recorded for this parcel yet.'}
-      </Text>
-
-      <View style={[styles.podGaps, { backgroundColor: theme.warningSoft }]}>
-        <Text style={[styles.podGapsTitle, { color: theme.warningOnSoft }]}>
-          What a real proof of delivery needs
-        </Text>
-        {[
-          'A delivered_at timestamp, written when the driver confirms the handover',
-          'The name of whoever actually received it — often not the recipient',
-          'A photo or signature captured at the door, stored like the driver documents are',
-        ].map((line) => (
-          <Text key={line} style={[styles.podGap, { color: theme.warningOnSoft }]}>
-            • {line}
-          </Text>
-        ))}
+      <View style={styles.podFacts}>
+        {!!booking.receivedBy && <PodFact label="Received by" value={booking.receivedBy} />}
+        {!!booking.deliveredAt && (
+          <PodFact label="Delivered at" value={new Date(booking.deliveredAt).toLocaleString()} />
+        )}
+        {!!booking.pickedUpAt && (
+          <PodFact label="Collected at" value={new Date(booking.pickedUpAt).toLocaleString()} />
+        )}
       </View>
+
+      {!!booking.proofNote && (
+        <Text style={[styles.podBody, { color: theme.textSecondary }]}>
+          &ldquo;{booking.proofNote}&rdquo;
+        </Text>
+      )}
+
+      {booking.proofPath ? (
+        photoUrl ? (
+          <Image
+            source={{ uri: photoUrl }}
+            style={styles.podPhoto}
+            contentFit="cover"
+            accessibilityLabel="Photo taken at handover"
+          />
+        ) : (
+          <Text style={[styles.podHint, { color: theme.textMuted }]}>Loading the photo…</Text>
+        )
+      ) : (
+        <Text style={[styles.podHint, { color: theme.textMuted }]}>
+          No photo was captured at handover — the name above is the whole record.
+        </Text>
+      )}
     </Card>
   );
 }
 
-/**
- * A miss.
- *
- * Deliberately does not say "no such parcel". Tracking is scoped to what your
- * account may see, so the honest answer is "not on this account" — telling
- * someone their ID does not exist when it does, and is simply someone else's,
- * sends them looking for a typo that is not there.
- */
+function PodFact({ label, value }: { label: string; value: string }) {
+  const theme = useTheme();
+  return (
+    <View style={styles.podFact}>
+      <Text style={[styles.podFactLabel, { color: theme.textMuted }]}>{label}</Text>
+      <Text style={[styles.podFactValue, { color: theme.text }]}>{value}</Text>
+    </View>
+  );
+}
+
 function NotFound({ id, signedIn }: { id: string; signedIn: boolean }) {
   const theme = useTheme();
   const router = useRouter();
@@ -609,17 +697,34 @@ const styles = StyleSheet.create({
     ...Typography.caption,
     lineHeight: 19,
   },
-  podGaps: {
-    gap: Spacing.one,
-    padding: Spacing.three - 2,
-    borderRadius: Radius.md,
+  podFacts: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: Spacing.three,
   },
-  podGapsTitle: {
+  podFact: {
+    flexGrow: 1,
+    flexBasis: 150,
+    gap: Spacing.half,
+  },
+  podFactLabel: {
     ...Typography.caption,
-    ...font(700),
-    marginBottom: Spacing.half,
   },
-  podGap: {
+  podFactValue: {
+    ...Typography.meta,
+    ...font(600),
+  },
+  /**
+   * 4:3, which is what a phone camera gives at the default aspect. Letting the
+   * image set its own height makes the card jump as the signed URL resolves.
+   */
+  podPhoto: {
+    width: '100%',
+    aspectRatio: 4 / 3,
+    borderRadius: Radius.md,
+    backgroundColor: '#E2E8F0',
+  },
+  podHint: {
     ...Typography.caption,
     lineHeight: 18,
   },

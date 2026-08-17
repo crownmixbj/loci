@@ -3,6 +3,7 @@ import { Image } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
 import {
+  Ban,
   Bike,
   Boxes,
   ClipboardList,
@@ -38,7 +39,6 @@ import {
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Footer } from '@/components/Footer';
-import { PackagesReadyForPick } from '@/components/PackagesReadyForPick';
 import { HowItWorks } from '@/components/ui/how-it-works';
 import { PulsingDot } from '@/components/ui/marquee';
 import { SectionHeader } from '@/components/ui/section-header';
@@ -50,7 +50,8 @@ import { ServiceCategoryCard } from '@/components/ui/service-category-card';
 import { serviceArtwork } from '@/constants/service-artwork';
 import { servicePrefillParams } from '@/constants/services';
 import { HERO_BACKGROUND } from '@/constants/hero-background';
-import {FontSize,
+import {
+  FontSize,
   HeroSurface,
   Radius,
   Spacing,
@@ -62,7 +63,6 @@ import {FontSize,
 } from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';
 import {
-  CITIES,
   filterBookings,
   formatNaira,
   isPendingPickup,
@@ -117,6 +117,9 @@ const STAGE_ICONS: Record<BookingStage, typeof Truck> = {
   'In Transit': Truck,
   'Out for Delivery': Bike,
   Delivered: House,
+  // Not a stage on the journey, but the map has to be total — a parcel a sender
+  // called off still appears in their list and still needs an icon.
+  Cancelled: Ban,
 };
 
 type CategoryDef = {
@@ -176,8 +179,6 @@ export default function HomeScreen() {
 
   const [query, setQuery] = useState('');
   const [focused, setFocused] = useState(false);
-  const [routeQuery, setRouteQuery] = useState('');
-  const [routeFocused, setRouteFocused] = useState(false);
 
   const scrollRef = useRef<ScrollView>(null);
   const trackY = useRef(0);
@@ -218,17 +219,6 @@ export default function HomeScreen() {
   const visible = isSearching ? results : results.slice(0, HOME_PREVIEW_LIMIT);
 
   /** Carries any typed city straight into the browse screen's filter. */
-  const openAvailablePackages = () => {
-    Keyboard.dismiss();
-    const typed = routeQuery.trim();
-    const match = CITIES.find((c) => c.toLowerCase() === typed.toLowerCase());
-    router.navigate(
-      match
-        ? { pathname: '/available-packages', params: { origin: match } }
-        : '/available-packages',
-    );
-  };
-
   /** The search input now lives in the hero, so this scrolls to the results. */
   const scrollToTracking = () => {
     requestAnimationFrame(() =>
@@ -305,7 +295,21 @@ export default function HomeScreen() {
                 Insured.
               </Text>
 
-              {/* Two action cards side by side: track what you sent, or find work. */}
+              {/*
+                One action card, not two.
+
+                The second was "Available packages" — a city box and a Schedule
+                a journey button. It went because declaring a journey already
+                lives under Jobs & Drivers, and a second door to the same screen
+                on the landing page split the hero between a customer action and
+                a driver one. The people who arrive here are overwhelmingly
+                senders; drivers know where their tab is.
+
+                `heroCards` is centred by `heroCenter` and its max width drops
+                from 620 to 340 — see the style. The card itself is `flex: 1`,
+                so without that it would have stretched to fill the pair's
+                width.
+              */}
               <View style={[styles.heroCards, !twoUpCards && styles.heroCardsStacked]}>
                 <GlassCard>
                   <View style={styles.heroCardHeader}>
@@ -352,54 +356,6 @@ export default function HomeScreen() {
                     size="md"
                     icon={(color, size) => <Search color={color} size={size} />}
                     onPress={handleTrack}
-                  />
-                </GlassCard>
-
-                <GlassCard>
-                  <View style={styles.heroCardHeader}>
-                    <PackageSearch color={theme.primary} size={16} />
-                    <Text style={[styles.heroCardTitle, { color: theme.text }]}>
-                      Available packages
-                    </Text>
-                  </View>
-
-                  <View
-                    style={[
-                      styles.searchBar,
-                      {
-                        backgroundColor: theme.surfaceMuted,
-                        borderColor: theme.border,
-                      },
-                      routeFocused && styles.searchBarFocused,
-                    ]}>
-                    <MapPin color={routeFocused ? theme.primary : theme.textMuted} size={16} />
-                    <TextInput
-                      style={[styles.searchInput, { color: theme.text }]}
-                      placeholder="Lagos, Ibadan…"
-                      placeholderTextColor={theme.textMuted}
-                      value={routeQuery}
-                      onChangeText={setRouteQuery}
-                      onFocus={() => setRouteFocused(true)}
-                      onBlur={() => setRouteFocused(false)}
-                      onSubmitEditing={openAvailablePackages}
-                      autoCorrect={false}
-                      returnKeyType="search"
-                    />
-                    {routeQuery.length > 0 && (
-                      <Pressable
-                        onPress={() => setRouteQuery('')}
-                        hitSlop={10}
-                        accessibilityLabel="Clear">
-                        <X color={theme.textMuted} size={16} />
-                      </Pressable>
-                    )}
-                  </View>
-
-                  <Button
-                    label="Find Jobs"
-                    size="md"
-                    icon={(color, size) => <PackageSearch color={color} size={size} />}
-                    onPress={openAvailablePackages}
                   />
                 </GlassCard>
               </View>
@@ -458,12 +414,15 @@ export default function HomeScreen() {
               <HowItWorks />
 
               {/*
-            One feed per role: drivers get jobs to claim, senders get their own
-            parcels. Showing both put sender and driver intent side by side.
-          */}
-              {role === 'driver' && (
-                <PackagesReadyForPick onSeeAll={() => router.navigate('/available-packages')} />
-              )}
+                No driver feed here any more.
+
+                It listed unassigned parcels with a Claim button, which is the
+                marketplace this release removed — see the header of
+                `available-packages.tsx`. A driver's work arrives as a timed
+                offer on Assigned Trip; a second list of the same parcels with a
+                first-come button would have let one driver claim a parcel
+                another was reading a countdown on.
+              */}
 
               {/* ---------- My sent packages (senders only) ---------- */}
               {role !== 'driver' && (
@@ -768,7 +727,16 @@ const styles = StyleSheet.create({
     alignItems: 'stretch',
     gap: Spacing.three - 4,
     width: '100%',
-    maxWidth: 620,
+    /*
+      ⚠ 620 while this held two cards; 340 now it holds one.
+
+        `heroCard` is `flex: 1`, so a single child fills whatever this allows —
+        leaving 620 would have stretched one small search box and a button
+        across the full width of the hero. 340 is roughly what each card
+        occupied when there were two, so the remaining one keeps its proportions
+        instead of inheriting the pair's.
+    */
+    maxWidth: 340,
     // Cards are the last thing in the hero — the container's padding closes it.
     marginTop: Spacing.four,
   },

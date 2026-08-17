@@ -302,8 +302,14 @@ check(
 
 /*
  * The terms must not claim protections the app does not implement. There is no
- * insurance, no refund path and no payout ledger — a clause implying otherwise
- * is the kind of thing someone relies on at the worst moment.
+ * insurance and no refund path — a clause implying otherwise is the kind of
+ * thing someone relies on at the worst moment.
+ *
+ * A payout ledger used to be on that list and no longer is: `30_driver_wallet
+ * .sql` records earnings and payouts. What is still absent is any *transfer* —
+ * `settle_payout` records that a human sent money, it does not send it — so
+ * terms promising automatic or scheduled payment would be the same mistake in
+ * a new place.
  */
 const termsText = TERMS.map((c) => `${c.title} ${c.body}`)
   .join(' ')

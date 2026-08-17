@@ -11,6 +11,13 @@
  */
 declare module 'node:fs' {
   export function readFileSync(path: string, encoding: 'utf8'): string;
+  export function existsSync(path: string): boolean;
+  export function readdirSync(
+    path: string,
+    options: { withFileTypes: true },
+  ): { name: string; isDirectory(): boolean }[];
+  /** Plain names, which is all the layout sweep needs. */
+  export function readdirSync(path: string): string[];
 }
 
 declare module 'node:path' {

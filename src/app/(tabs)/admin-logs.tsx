@@ -2,6 +2,7 @@ import { CircleAlert, CircleCheck, FileWarning, TriangleAlert } from 'lucide-rea
 import { useCallback, useEffect, useState } from 'react';
 import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
 
+import { errorMessage } from '@/lib/errors';
 import { AdminError, AdminShell } from '@/components/ui/admin-shell';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
@@ -49,7 +50,7 @@ export default function AdminLogsScreen() {
       setEvents(await fetchEvents({ level: filter === 'all' ? 'all' : (filter as EventLevel) }));
       setError(null);
     } catch (thrown) {
-      setError(thrown instanceof Error ? thrown.message : 'Could not load the log.');
+      setError(errorMessage(thrown, 'Could not load the log.'));
     } finally {
       setLoading(false);
     }

@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { Modal, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 
+import { errorMessage } from '@/lib/errors';
 import { Button } from '@/components/ui/button';
 import { Elevation, Radius, Spacing, Typography, font } from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';
@@ -65,7 +66,7 @@ export function ModerationDialog({
        * for the ban", "Remove this person's admin role first" — and each names
        * the next step. Paraphrasing them loses that.
        */
-      setError(thrown instanceof Error ? thrown.message : 'The database refused the change.');
+      setError(errorMessage(thrown, 'The database refused the change.'));
     } finally {
       setBusy(false);
     }

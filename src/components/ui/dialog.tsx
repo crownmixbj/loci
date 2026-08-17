@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Modal, Pressable, StyleSheet, Text, View } from 'react-native';
 
-import {FontSize, Elevation, Radius, Spacing, Typography, font } from '@/constants/theme';
+import { FontSize, Elevation, Radius, Spacing, Typography, font } from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';
 
 /**

@@ -1,7 +1,7 @@
 import { Apple, Check, Smartphone, X } from 'lucide-react-native';
 import { Linking, Modal, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 
-import {FontSize, Elevation, Radius, Spacing, Typography, font } from '@/constants/theme';
+import { FontSize, Elevation, Radius, Spacing, Typography, font } from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';
 
 export const STORE_LINKS = {

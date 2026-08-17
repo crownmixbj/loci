@@ -1,6 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import type { ReactNode } from 'react';
 
+import { errorMessage } from '@/lib/errors';
 import { isSupabaseConfigured, supabase } from '@/lib/supabase';
 import { SEED_HUBS, type Hub } from '@/constants/hubs';
 import { parseHours } from '@/constants/hub-hours';
@@ -200,7 +201,9 @@ export function HubsProvider({ children }: { children: ReactNode }) {
       }
       setError(null);
     } catch (caught) {
-      const message = caught instanceof Error ? caught.message : String(caught);
+      // See `src/lib/errors.ts`: String() on a Supabase error yields
+      // "[object Object]", which the tests below would never match.
+      const message = errorMessage(caught, String(caught));
       setAllHubs(SEED_HUBS);
       setUsingSeed(true);
       setError(

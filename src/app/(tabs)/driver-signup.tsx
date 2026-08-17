@@ -25,6 +25,7 @@ import {
   Upload,
   UserCheck,
   UserRound,
+  Phone,
 } from 'lucide-react-native';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
@@ -39,6 +40,12 @@ import {
   View,
 } from 'react-native';
 
+import { errorMessage } from '@/lib/errors';
+import { BottomSheet } from '@/components/ui/bottom-sheet';
+import { ExpiryField } from '@/components/ui/expiry-field';
+import { parseExpiry } from '@/lib/expiry';
+import { resolveSenderPhoto, SenderPhotoSheet } from '@/components/ui/sender-photo-sheet';
+import { identityLabel, runIdentityCheck, type IdentityOutcome } from '@/store/capture-session';
 import { showDialog } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
@@ -49,7 +56,15 @@ import { ValidatedEmailInput } from '@/components/ValidatedEmailInput';
 import { ValidatedPhoneInput } from '@/components/ValidatedPhoneInput';
 import { isValidNigerianPhone, nigerianPhoneError } from '@/utils/validation';
 import { SectionLabel } from '@/components/ui/screen';
-import {FontSize, MaxContentWidth, PageCanvas, Radius, Spacing, Typography, font } from '@/constants/theme';
+import {
+  FontSize,
+  MaxContentWidth,
+  PageCanvas,
+  Radius,
+  Spacing,
+  Typography,
+  font,
+} from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';
 import {
   isValidEmail,
@@ -75,7 +90,14 @@ import {
 } from '@/store/driver-applications';
 import { isSupabaseConfigured } from '@/lib/supabase';
 import { uploadDocument } from '@/store/driver-documents';
+import { recordDocument } from '@/store/documents';
 import { useAuthGate } from '@/hooks/use-auth-gate';
+import {
+  displayRegisteredPhone,
+  hasRegisteredPhone,
+  phoneLockMessage,
+  PHONE_LOCK_TITLE,
+} from '@/store/registered-phone';
 import { useFormDraft } from '@/hooks/use-form-draft';
 
 const VEHICLE_TYPES = ['Motorcycle', 'Car', 'Van', 'Truck'] as const;
@@ -102,26 +124,44 @@ const DOCUMENTS = [
     label: "Driver's licence",
     hint: 'Front and back, clearly readable',
     file: 'drivers-licence',
+    /*
+      `expiry` mirrors `public.document_kinds` in 31_document_expiry.sql, and
+      the server is the authority — `record_document` refuses a missing required
+      date and refuses a date on a slot that has none. This copy exists so the
+      form can show the right field rather than discover the rule by being told
+      off after an upload.
+
+        'required'  a lapsed one stops dispatch, so LOCI must know the date
+        'optional'  it expires, but nothing breaks if it does
+        'none'      no meaningful date; asking invites an invented one
+    */
+    expiry: 'required',
   },
   {
+    // A NIN slip has no expiry printed on it, and it is what almost everybody
+    // uploads here. See the note in `document_kinds`.
+    expiry: 'none',
     key: 'id',
     label: "Driver's government ID",
     hint: "NIN slip, International Passport, or Voter's Card",
     file: 'driver-government-id',
   },
   {
+    expiry: 'none',
     key: 'guarantorId',
     label: "Guarantor's government ID",
     hint: "NIN slip, National ID card, or Voter's Card",
     file: 'guarantor-government-id',
   },
   {
+    expiry: 'none',
     key: 'vehicle',
     label: 'Vehicle picture',
     hint: 'Side-on, with the plate visible',
     file: 'vehicle-photo',
   },
   {
+    expiry: 'required',
     key: 'insurance',
     label: 'Car insurance',
     hint: 'Valid certificate, showing the policy expiry date',
@@ -185,7 +225,16 @@ const NO_DOCUMENTS = Object.fromEntries(DOCUMENTS.map((doc) => [doc.key, null]))
   AttachedDocument
 >;
 
-type FieldErrors = Partial<Record<keyof SignupForm | DocumentKey, string>>;
+/**
+ * Expiry errors get their own keys, `<documentKey>Expiry`.
+ *
+ * Sharing the document's key would mean a valid file with a bad date replaced
+ * the attachment error and vice versa — one field, two independent problems,
+ * and only ever one of them visible.
+ */
+type ExpiryErrorKey = `${DocumentKey}Expiry`;
+
+type FieldErrors = Partial<Record<keyof SignupForm | DocumentKey | ExpiryErrorKey, string>>;
 
 const INITIAL_FORM: SignupForm = {
   fullName: '',
@@ -210,7 +259,11 @@ const INITIAL_FORM: SignupForm = {
   kinRelationship: 'Spouse',
 };
 
-function validate(form: SignupForm, documents: Record<DocumentKey, AttachedDocument>): FieldErrors {
+function validate(
+  form: SignupForm,
+  documents: Record<DocumentKey, AttachedDocument>,
+  expiries: Record<string, string>,
+): FieldErrors {
   const errors: FieldErrors = {};
 
   const name = form.fullName.trim();
@@ -312,6 +365,35 @@ function validate(form: SignupForm, documents: Record<DocumentKey, AttachedDocum
   for (const doc of DOCUMENTS) {
     if (!documents[doc.key]) {
       errors[doc.key] = `Attach your ${doc.label.toLowerCase()}`;
+      continue;
+    }
+
+    /*
+      The date is only checked once the file is attached.
+
+      Reporting "attach your licence" and "give the licence expiry date" at the
+      same time on an empty slot is two errors for one omission, and the second
+      one is unanswerable until the first is fixed.
+    */
+    if (doc.expiry === 'none') continue;
+
+    const parsed = parseExpiry(expiries[doc.key] ?? '');
+
+    /*
+      Written without naming 'optional', which no slot currently uses.
+
+      The previous version had a branch for it, and once the government ID slots
+      became dateless TypeScript could prove that branch unreachable — dead code
+      that would have quietly stopped validating the day somebody added an
+      optional slot back. Phrased this way both rules hold whatever the slot is:
+      a date that parses badly is always an error, and a missing one is an error
+      only where it was required.
+    */
+    if (parsed.ok === false) {
+      errors[`${doc.key}Expiry` as keyof FieldErrors] = parsed.error;
+    } else if (doc.expiry === 'required' && parsed.ok !== true) {
+      errors[`${doc.key}Expiry` as keyof FieldErrors] =
+        `Give the expiry date on your ${doc.label.toLowerCase()}`;
     }
   }
 
@@ -327,10 +409,50 @@ export default function DriverSignupScreen() {
   const theme = useTheme();
   const router = useRouter();
   const { registerDriver, user, refreshDriverStatus, application } = useSession();
+
+  /*
+   * The account's number, and whether there is one to lock to.
+   *
+   * An account created before sign-up captured a phone has none — those keep an
+   * editable field, because a locked empty field is a form nobody can submit.
+   */
+  const registeredPhone = user?.phone ?? '';
+  const phoneLocked = hasRegisteredPhone(registeredPhone);
+  const [phoneLockOpen, setPhoneLockOpen] = useState(false);
+
+  /** The selfie + NIN match that runs on submit. */
+  const [identityOpen, setIdentityOpen] = useState(false);
+  const [identityOutcome, setIdentityOutcome] = useState<IdentityOutcome | null>(null);
   const { requireAuth, isAuthenticated } = useAuthGate();
 
   const [form, setForm] = useState<SignupForm>(INITIAL_FORM);
+
+  /*
+   * Prepopulate from the account.
+   *
+   * Runs on the registered number rather than once on mount, because the
+   * session restores asynchronously — on a cold start this component renders
+   * before `user` exists, and a mount-only effect would leave the field empty
+   * for exactly the people it is meant to fill it for.
+   */
+  useEffect(() => {
+    if (!phoneLocked) return;
+    setForm((previous) => {
+      const wanted = displayRegisteredPhone(registeredPhone);
+      return previous.phone === wanted ? previous : { ...previous, phone: wanted };
+    });
+  }, [phoneLocked, registeredPhone]);
   const [documents, setDocuments] = useState<Record<DocumentKey, AttachedDocument>>(NO_DOCUMENTS);
+
+  /*
+   * Expiry dates, as raw `DD/MM/YYYY` text.
+   *
+   * Held as typed rather than parsed, so a half-entered date survives a
+   * re-render and the field does not fight the person filling it in. Parsing
+   * happens in `validate` and again at submit; `src/lib/expiry.ts` is the one
+   * place that knows how.
+   */
+  const [expiries, setExpiries] = useState<Record<string, string>>({});
 
   /*
    * The answers outlive this component.
@@ -489,7 +611,7 @@ export default function DriverSignupScreen() {
    * field's message, so the two can never disagree.
    */
   const validateField = (key: keyof SignupForm) => {
-    const all = validate(form, documents);
+    const all = validate(form, documents, expiries);
     setErrors((prev) => {
       const next = { ...prev };
       if (all[key]) next[key] = all[key];
@@ -499,7 +621,7 @@ export default function DriverSignupScreen() {
   };
 
   const handleSubmit = () => {
-    const nextErrors = validate(form, documents);
+    const nextErrors = validate(form, documents, expiries);
     setErrors(nextErrors);
     if (Object.keys(nextErrors).length > 0) return;
 
@@ -510,12 +632,49 @@ export default function DriverSignupScreen() {
      * Here the application is already complete and the state survives the trip
      * to sign-in, because this screen stays mounted underneath.
      */
-    requireAuth(() => void submitApplication(), {
+    requireAuth(() => setIdentityOpen(true), {
       title: 'Sign in to submit your application',
       reason:
         'Your application is tied to an account: it is how we tell you the outcome, and how you get into the driver dashboard once approved. Nothing you have typed will be lost.',
       next: '/driver-signup',
     });
+  };
+
+  /*
+   * The identity step, between a complete application and a submitted one.
+   *
+   * The selfie is captured, checked for liveness, and matched against the photo
+   * held for the applicant's NIN — then the application is submitted *whatever
+   * the answer was*. A mismatch is recorded on the row for a reviewer, not used
+   * to refuse the applicant: NIMC photos can be a decade old, and a system that
+   * auto-rejected on that number would turn "your face has aged" into "you
+   * cannot work".
+   */
+  const handleIdentityDone = async (result: { uri: string } | { sessionId: string }) => {
+    setIsSubmitting(true);
+    try {
+      const resolved = await resolveSenderPhoto(result);
+      if (!resolved.ok) {
+        showDialog(
+          'The photo did not upload',
+          `${resolved.error}\n\nNothing has been submitted — your answers are still here.`,
+        );
+        return;
+      }
+
+      /*
+       * Run the match before submitting, so the verdict is already on the row
+       * the reviewer opens. Running it after would leave a window where an
+       * application looked unchecked.
+       */
+      const identity = await runIdentityCheck(resolved.sessionId, form.nin.trim());
+      setIdentityOutcome(identity);
+
+      await submitApplication();
+    } finally {
+      setIsSubmitting(false);
+      setIdentityOpen(false);
+    }
   };
 
   /** Runs only once we know whose application this is. */
@@ -562,6 +721,30 @@ export default function DriverSignupScreen() {
         }
 
         uploaded[doc.key] = result.path;
+
+        /*
+          The row, written after the bytes land.
+
+          `record_document` is what makes this document expirable — the jsonb
+          below still holds the path a reviewer approved, but it has nowhere to
+          put a date. Recorded here rather than after `insertApplication` so a
+          failure at that step does not leave documents with no records.
+
+          ⚠ A failure here does NOT stop the submission.
+
+            The application and its files are complete and reviewable without
+            an expiry row; refusing the whole submission over a missing date
+            would throw away a thirty-field form the applicant just filled in.
+            The gap surfaces on Be a Driver / Updates as "add expiry date",
+            which is a prompt they can answer in ten seconds.
+        */
+        const parsedExpiry = doc.expiry === 'none' ? null : parseExpiry(expiries[doc.key] ?? '');
+
+        await recordDocument({
+          kind: doc.key,
+          path: result.path,
+          expires: parsedExpiry?.ok === true ? parsedExpiry.iso : null,
+        });
       }
 
       try {
@@ -595,7 +778,7 @@ export default function DriverSignupScreen() {
       } catch (thrown) {
         setIsSubmitting(false);
 
-        const message = thrown instanceof Error ? thrown.message : 'Something went wrong.';
+        const message = errorMessage(thrown, 'Something went wrong.');
         // The unique constraint is the common case and deserves its own words.
         showDialog(
           /duplicate key|one_open_application/i.test(message)
@@ -643,7 +826,14 @@ export default function DriverSignupScreen() {
   };
 
   if (isSubmitted) {
-    return <ReviewStatus reference={reference} form={form} onGoToDashboard={goToDashboard} />;
+    return (
+      <ReviewStatus
+        reference={reference}
+        form={form}
+        identity={identityOutcome}
+        onGoToDashboard={goToDashboard}
+      />
+    );
   }
 
   return (
@@ -748,12 +938,36 @@ export default function DriverSignupScreen() {
               autoCapitalize="words"
             />
 
+            {/*
+              Locked to the account, not merely prefilled.
+
+              A prefilled-but-editable field would let someone change it and be
+              refused by the trigger at submit — after four sections of typing.
+              Refusing the keystroke and saying why is the same rule enforced
+              somewhere the applicant can act on it.
+
+              `editable={false}` is the visible half; the trigger in
+              `16_driver_identity.sql` is the half that actually holds, because
+              a disabled input still sends its value.
+            */}
             <ValidatedPhoneInput
               label="Phone number"
               value={form.phone}
-              onChangeText={(text) => setField('phone', text)}
+              editable={!phoneLocked}
+              onChangeText={(text) => {
+                if (phoneLocked) {
+                  setPhoneLockOpen(true);
+                  return;
+                }
+                setField('phone', text);
+              }}
               onBlur={() => validateField('phone')}
               showError={Boolean(errors.phone)}
+              hint={
+                phoneLocked
+                  ? 'From your LOCI account. Tap to see why this cannot be changed here.'
+                  : undefined
+              }
             />
 
             <ValidatedEmailInput
@@ -1014,7 +1228,9 @@ export default function DriverSignupScreen() {
               title="Documents"
             />
             <Text style={[styles.helper, { color: theme.textMuted }]}>
-              Attachment is simulated for now — tapping marks the document as received.
+              Your licence and insurance need the expiry date printed on them. LOCI reminds you a
+              month before either lapses — once one has, we have to stop offering you parcels until
+              it is renewed.
             </Text>
 
             {DOCUMENTS.map((doc) => (
@@ -1026,6 +1242,12 @@ export default function DriverSignupScreen() {
                 error={errors[doc.key]}
                 onAttach={() => attachDocument(doc.key, doc.label)}
                 onRemove={() => removeDocument(doc.key)}
+                expiry={doc.expiry}
+                expiryValue={expiries[doc.key] ?? ''}
+                expiryError={errors[`${doc.key}Expiry` as keyof FieldErrors]}
+                onExpiryChange={(next) =>
+                  setExpiries((current) => ({ ...current, [doc.key]: next }))
+                }
               />
             ))}
           </Card>
@@ -1045,6 +1267,35 @@ export default function DriverSignupScreen() {
           />
         </View>
       </ScrollView>
+
+      {/*
+        The refusal, as a sheet rather than an OS alert.
+
+        `showDialog` would work, but this needs two paragraphs and a number the
+        applicant has to read carefully — an alert that vanishes on any tap is a
+        poor place to put the one piece of information that resolves the
+        problem.
+      */}
+      <SenderPhotoSheet
+        purpose="driver"
+        visible={identityOpen}
+        busy={isSubmitting}
+        onCancel={() => setIdentityOpen(false)}
+        onDone={handleIdentityDone}
+      />
+
+      <BottomSheet visible={phoneLockOpen} onClose={() => setPhoneLockOpen(false)} maxHeight="55%">
+        <View style={styles.lockSheet}>
+          <View style={[styles.lockIcon, { backgroundColor: theme.primarySoft }]}>
+            <Phone color={theme.primaryOnSoft} size={22} />
+          </View>
+          <Text style={[styles.lockTitle, { color: theme.text }]}>{PHONE_LOCK_TITLE}</Text>
+          <Text style={[styles.lockBody, { color: theme.textSecondary }]}>
+            {phoneLockMessage(registeredPhone)}
+          </Text>
+          <Button label="Got it" onPress={() => setPhoneLockOpen(false)} />
+        </View>
+      </BottomSheet>
     </KeyboardAvoidingView>
   );
 }
@@ -1064,6 +1315,10 @@ function DocumentRow({
   error,
   onAttach,
   onRemove,
+  expiry,
+  expiryValue,
+  expiryError,
+  onExpiryChange,
 }: {
   label: string;
   hint: string;
@@ -1071,10 +1326,24 @@ function DocumentRow({
   error?: string;
   onAttach: () => void;
   onRemove: () => void;
+  /** Mirrors `document_kinds`. See the comment on DOCUMENTS. */
+  expiry: 'required' | 'optional' | 'none';
+  expiryValue: string;
+  expiryError?: string;
+  onExpiryChange: (next: string) => void;
 }) {
   const theme = useTheme();
   const attached = document !== null;
   const size = attached ? formatSize(document.size) : null;
+
+  /*
+   * The date appears only once a file is attached.
+   *
+   * An expiry field under an empty slot is asking for the expiry of nothing.
+   * It also halves the apparent length of this section for anyone scrolling it
+   * before they have started attaching, which is everybody.
+   */
+  const wantsExpiry = attached && expiry !== 'none';
 
   return (
     <View style={styles.docBlock}>
@@ -1128,6 +1397,18 @@ function DocumentRow({
         </Text>
       </Pressable>
       {!!error && <Text style={[styles.errorText, { color: theme.danger }]}>{error}</Text>}
+
+      {wantsExpiry && (
+        <View style={styles.docExpiry}>
+          <ExpiryField
+            label={label}
+            value={expiryValue}
+            onChange={onExpiryChange}
+            required={expiry === 'required'}
+            error={expiryError}
+          />
+        </View>
+      )}
     </View>
   );
 }
@@ -1164,10 +1445,13 @@ function nextSteps(email: string): { text: string; icon: (color: string) => Reac
 function ReviewStatus({
   reference,
   form,
+  identity,
   onGoToDashboard,
 }: {
   reference: string;
   form: SignupForm;
+  /** Null when the check never ran — an older submission, or no provider. */
+  identity: IdentityOutcome | null;
   onGoToDashboard: () => void;
 }) {
   const theme = useTheme();
@@ -1208,6 +1492,23 @@ function ReviewStatus({
           <Text style={[styles.statusTitle, { color: theme.text }]}>
             Application Submitted Successfully!
           </Text>
+          {/*
+            The identity verdict, told to the applicant rather than kept from
+            them.
+
+            A mismatch is not a rejection and the wording must not read like
+            one — but somebody whose selfie failed to match a government photo
+            has a right to know that is on their file before a reviewer sees it,
+            not after they are turned down.
+          */}
+          {identity && identity.status !== 'matched' && (
+            <View style={[styles.identityNote, { backgroundColor: theme.warningSoft }]}>
+              <Text style={[styles.identityNoteText, { color: theme.warningOnSoft }]}>
+                {identityLabel(identity)}
+              </Text>
+            </View>
+          )}
+
           <Text style={[styles.statusBody, { color: theme.textSecondary }]}>
             Thank you for joining the LOCI network, {firstName}. Your application has been received.
           </Text>
@@ -1419,6 +1720,33 @@ function SummaryRow({
 }
 
 const styles = StyleSheet.create({
+  identityNote: {
+    padding: Spacing.three - 4,
+    borderRadius: Radius.md,
+    marginBottom: Spacing.two,
+  },
+  identityNoteText: {
+    ...Typography.caption,
+    lineHeight: 18,
+  },
+  lockSheet: {
+    gap: Spacing.three,
+    alignItems: 'flex-start',
+  },
+  lockIcon: {
+    width: 44,
+    height: 44,
+    borderRadius: Radius.pill,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  lockTitle: {
+    ...Typography.sectionTitle,
+  },
+  lockBody: {
+    ...Typography.meta,
+    lineHeight: 21,
+  },
   flex: {
     flex: 1,
   },
@@ -1519,6 +1847,11 @@ const styles = StyleSheet.create({
   },
 
   // Documents
+  /** Indented under its document, so the pairing is visible without a label. */
+  docExpiry: {
+    paddingLeft: Spacing.three,
+    paddingTop: Spacing.two,
+  },
   docBlock: {
     gap: Spacing.one,
   },

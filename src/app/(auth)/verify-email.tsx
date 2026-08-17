@@ -3,6 +3,7 @@ import { MailCheck, RefreshCw } from 'lucide-react-native';
 import { useEffect, useState } from 'react';
 import { Linking, Platform, StyleSheet, Text, View } from 'react-native';
 
+import { errorMessage } from '@/lib/errors';
 import { AuthFooterLink, AuthShell } from '@/components/ui/auth-shell';
 import { Button } from '@/components/ui/button';
 import { Spacing, Typography, font } from '@/constants/theme';
@@ -57,7 +58,7 @@ export default function VerifyEmailScreen() {
     try {
       result = await resendConfirmation(email);
     } catch (thrown) {
-      result = { error: thrown instanceof Error ? thrown.message : 'Something went wrong.' };
+      result = { error: errorMessage(thrown, 'Something went wrong.') };
     } finally {
       setPending(false);
     }

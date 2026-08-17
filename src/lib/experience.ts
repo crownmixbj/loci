@@ -79,7 +79,15 @@ export function resolveExperience(input: ExperienceInput): Experience | null {
  */
 export const EXPERIENCE_HOME: Record<Experience, string> = {
   web: '/',
-  sender: '/',
+  /*
+   * The booking form, not the marketing home.
+   *
+   * On a phone the app opens on the thing you opened it to do. The landing
+   * page — hero, ticker, "Delivering with Excellence" — is a website's front
+   * door, and it has no tab in the native bar because nobody navigates to it
+   * once the app is installed.
+   */
+  sender: '/book',
   driver: '/driver',
 };
 
@@ -92,12 +100,38 @@ export const EXPERIENCE_HOME: Record<Experience, string> = {
  */
 const ROUTE_EXPERIENCES: { prefix: string; only: Experience[] }[] = [
   /*
+   * The marketing home is web-only.
+   *
+   * Matching is exact here: the prefix rule below compares `pathname === '/'`
+   * or `pathname.startsWith('//')`, so this catches the landing page and
+   * nothing else. Without it a native cold start lands on the hero with no tab
+   * selected, which reads as the app having failed to open properly.
+   */
+  { prefix: '/', only: ['web'] },
+
+  /*
    * Driver-side screens. Hidden from the sender app because a sender cannot use
    * them, not because they are secret — /driver on a sender's phone shows an
    * empty portal and a prompt to apply, which is noise rather than help.
    */
   { prefix: '/driver', only: ['web', 'driver'] },
   { prefix: '/available-packages', only: ['web', 'driver'] },
+
+  /*
+   * The wallet needs its own line, and the reason is the matcher.
+   *
+   * `routeAllowed` matches `pathname === prefix || pathname.startsWith(prefix +
+   * '/')` — segment-wise, deliberately, so that `/driver` does not swallow
+   * `/driver-signup`. That is right for signup and updates, which a *sender*
+   * should reach (applying to drive is how you stop being only a sender). It is
+   * wrong here: without this line `/driver-wallet` falls through to the shared
+   * default and a sender who has never driven gets a wallet.
+   *
+   * Not a security boundary — `driver_balance` returns their own rows, which
+   * are none. It is that an empty wallet in the sender app is a screen offering
+   * a payout for work the person cannot do.
+   */
+  { prefix: '/driver-wallet', only: ['web', 'driver'] },
 
   /*
    * Sending. An approved driver mid-shift is not booking a parcel, and the

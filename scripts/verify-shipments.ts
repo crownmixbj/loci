@@ -28,7 +28,7 @@ const read = (path: string) => readFileSync(join(ROOT, path), 'utf8');
 const navSource = read('src/components/ui/app-nav-bar.tsx');
 
 const DROPDOWN: Record<string, string> = {
-  'Send a New Parcel': 'book',
+  'New Shipment': 'book',
   'Active / In-Transit Parcels': 'my-packages',
   'Shipment History / Archives': 'my-packages',
   'Tracking / Proof of Delivery': 'tracking',
@@ -64,13 +64,13 @@ check(
 );
 
 /*
- * "Send a New Parcel" must point at the existing booking form, not a new one.
+ * "New Shipment" must point at the existing booking form, not a new one.
  * A second copy of a form that takes an address, a phone number and a declared
  * value would drift from the original within a release.
  */
 check(
-  'Send a New Parcel points at the existing /book form',
-  navSource.includes("label: 'Send a New Parcel'") && navSource.includes("href: '/book'"),
+  'New Shipment points at the existing /book form',
+  navSource.includes("label: 'New Shipment'") && navSource.includes("href: '/book'"),
 );
 
 // ------------------------------------------------------ sections and sort ---
@@ -135,30 +135,39 @@ check(
 const bookingsStore = read('src/store/bookings.tsx');
 
 /*
- * The schema has no proof of delivery. These assertions fail the moment someone
- * adds the fields, which is the prompt to replace the honest empty state with a
- * real one — and they fail just as loudly if the page starts claiming proof
- * without them.
+ * Proof of delivery now exists — see `supabase/10_delivery.sql`. These
+ * assertions changed direction on purpose: they used to require the fields to
+ * be absent and the page to say so. Now they require the fields to be present
+ * and the page to distinguish an evidenced delivery from a bare one, because
+ * that distinction is the whole value of the feature.
  */
-const POD_FIELDS = ['deliveredAt', 'receivedBy', 'proofPhoto', 'signature'];
+const POD_FIELDS = ['deliveredAt', 'receivedBy', 'proofPath', 'proofNote', 'pickedUpAt'];
 for (const field of POD_FIELDS) {
   check(
-    `the Booking type still has no ${field}`,
-    !bookingsStore.includes(`${field}:`),
-    `it exists now — the Proof of Delivery panel should stop saying it is missing`,
+    `the Booking type carries ${field}`,
+    bookingsStore.includes(`${field}:`),
+    'the tracking screen cannot show a handover record it has no field for',
   );
 }
 
 check(
-  'the screen states that no proof is held',
-  tracking.includes('NoProofOfDelivery') && tracking.includes('holds no evidence'),
+  'the empty Proof of Delivery panel is gone',
+  !tracking.includes('NoProofOfDelivery'),
+  'it was replaced by ProofOfDelivery, which renders the record that exists',
 );
 check(
-  'and names the three missing pieces',
-  tracking.includes('delivered_at timestamp') &&
-    tracking.includes('name of whoever actually received it') &&
-    tracking.includes('photo or signature'),
-  'a vague gap is not actionable',
+  'a delivery with no handover record is still called out',
+  tracking.includes('Marked delivered, but not evidenced'),
+  'every parcel completed before 10_delivery.sql looks like this, and a green tick against it would be false',
+);
+check(
+  'an evidenced handover names who took it and when',
+  tracking.includes('label="Received by"') && tracking.includes('label="Delivered at"'),
+);
+check(
+  'the proof photo is fetched through a signed URL',
+  tracking.includes('signedProofUrl'),
+  'the delivery-proof bucket is private; a raw storage path would render nothing',
 );
 check(
   'a delivered parcel is not shown as evidenced',
@@ -205,8 +214,8 @@ if (failures > 0) {
 }
 
 console.log(
-  'PASS — all four Shipments items resolve to real screens, Send a New Parcel reuses the\n' +
+  'PASS — all four Shipments items resolve to real screens, New Shipment reuses the\n' +
     '       existing form, the parcels list keeps one ownership rule, tracking admits it is\n' +
-    '       scoped to your account, and nothing invents a delivery timestamp or a proof of\n' +
-    '       delivery the schema cannot produce.',
+    '       scoped to your account, and the Proof of Delivery panel shows the handover\n' +
+    '       record where one exists and says so plainly where it does not.',
 );

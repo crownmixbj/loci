@@ -8,6 +8,7 @@ import {
   type ReactNode,
 } from 'react';
 
+import { errorMessage } from '@/lib/errors';
 import { isSupabaseConfigured } from '@/lib/supabase';
 import { claimBooking, fetchBookings, insertBooking } from '@/store/bookings-remote';
 import { SESSION_USER, useSession } from '@/store/session';
@@ -192,7 +193,15 @@ export const BOOKING_STAGES = [
   'Delivered',
 ] as const;
 
-export type BookingStage = (typeof BOOKING_STAGES)[number];
+/**
+ * The ordered pipeline, plus the one status that is not part of it.
+ *
+ * 'Cancelled' is deliberately outside `BOOKING_STAGES`: it is where a parcel
+ * stops, not a stage it passes through. Putting it in the array would make it
+ * reachable from `nextStage`, so a driver could "advance" a delivery into
+ * cancellation — see `supabase/11_cancellation.sql`.
+ */
+export type BookingStage = (typeof BOOKING_STAGES)[number] | 'Cancelled';
 
 /**
  * Where a parcel changes hands at each end of the journey.
@@ -205,21 +214,46 @@ export type BookingStage = (typeof BOOKING_STAGES)[number];
  * - `meetpoint` — an agreed public place, away from a hub but not a private
  *   address: a filling station, a mall entrance, a campus gate. The driver is
  *   already passing, so this carries no surcharge.
- * - `doorstep` — a driver runs the leg to a private address, which is the one
- *   option that costs extra. See `PRICING.doorstepSurcharge`.
+ * - `doorstep` — a driver runs the leg to a private address. Chargeable at the
+ *   dropoff end only.
  *
- * Only `doorstep` is chargeable. Adding a mode here without adding it to
- * `DOORSTEP_MODES` below means it is free by default, which is the safer way
- * round to get it wrong.
+ * Which of these costs extra depends on the *leg*, not the mode — see
+ * `isChargeableHandover` below. A mode not named there is free, which is the
+ * safer way round to get it wrong.
  */
 export type HandoverMode = 'hub' | 'meetpoint' | 'doorstep';
 
-/** The modes that attract the per-leg surcharge. */
-const CHARGEABLE_MODES: readonly HandoverMode[] = ['doorstep'];
+/**
+ * Which leg of which mode attracts the surcharge.
+ *
+ * Chargeability is a property of the *leg*, not of the mode, because the two
+ * ends are priced for opposite reasons:
+ *
+ *   pickup, `hub`        charged. Not because it costs LOCI more — it costs
+ *                        less — but to discourage senders bringing parcels to
+ *                        a hub, which is a queue LOCI has to staff.
+ *   pickup, anything     free. A driver collecting from a public location is
+ *                        already passing.
+ *   dropoff, `doorstep`  charged. A driver runs an extra leg to a private
+ *                        address.
+ *   dropoff, anything    free.
+ *
+ * The same mode therefore costs ₦800 at one end and nothing at the other, which
+ * is why this cannot be a set of modes. It used to be, and reading `'doorstep'`
+ * as "the expensive one" is now wrong in both directions.
+ */
+export type HandoverLeg = 'pickup' | 'dropoff';
 
-export function isChargeableHandover(mode: HandoverMode | undefined): boolean {
-  return mode !== undefined && CHARGEABLE_MODES.includes(mode);
+export function isChargeableHandover(mode: HandoverMode | undefined, leg: HandoverLeg): boolean {
+  if (mode === undefined) return false;
+  return leg === 'pickup' ? mode === 'hub' : mode === 'doorstep';
 }
+
+/** The cheapest legal mode at each end. Used for "from ₦X" headline quotes. */
+export const CHEAPEST_HANDOVER: Record<HandoverLeg, HandoverMode> = {
+  pickup: 'meetpoint',
+  dropoff: 'hub',
+};
 
 export type Booking = {
   id: string;
@@ -289,17 +323,67 @@ export type Booking = {
   driverId: string | null;
   acceptedAt: string | null;
   createdAt: string;
+
+  /**
+   * When each irreversible step actually happened, and the evidence for the
+   * last one. See `supabase/10_delivery.sql`.
+   *
+   * Null on every parcel that predates the delivery migration — the tracking
+   * screen shows a timestamp only where one exists rather than inventing it.
+   */
+  pickedUpAt: string | null;
+  deliveredAt: string | null;
+
+  /**
+   * Set only when a *sender* called the parcel off. A driver releasing a job
+   * leaves none of these — the shipment survives and returns to the board.
+   */
+  cancelledAt: string | null;
+  cancellationReason: string | null;
+  /** Who physically took it. Often not the named recipient. */
+  receivedBy: string | null;
+  /** Path in the private `delivery-proof` bucket, opened via a signed URL. */
+  proofPath: string | null;
+  proofNote: string | null;
 };
 
 /** Fields the booking form supplies; the store fills in the rest. */
 export type NewBookingInput = Omit<
   Booking,
-  'id' | 'trackingId' | 'status' | 'createdAt' | 'driver' | 'driverId' | 'acceptedAt' | 'senderId'
+  | 'id'
+  | 'trackingId'
+  | 'status'
+  | 'createdAt'
+  | 'driver'
+  | 'driverId'
+  | 'acceptedAt'
+  | 'senderId'
+  // Delivery facts, written by `advance_booking` and never by the form.
+  | 'pickedUpAt'
+  | 'deliveredAt'
+  | 'receivedBy'
+  | 'proofPath'
+  | 'proofNote'
+  | 'cancelledAt'
+  | 'cancellationReason'
 > &
   Partial<Pick<Booking, 'status'>>;
 
+/**
+ * Position in the ordered pipeline, or -1.
+ *
+ * 'Cancelled' is not in the pipeline, so it returns -1 — the same answer as an
+ * unrecognised status. Callers that draw progress must treat a negative index
+ * as "no progress to draw" rather than clamping it to the first stage, which
+ * would show a cancelled parcel as freshly booked.
+ */
 export function stageIndex(stage: BookingStage): number {
-  return BOOKING_STAGES.indexOf(stage);
+  return (BOOKING_STAGES as readonly string[]).indexOf(stage);
+}
+
+/** True for a parcel that has stopped, whichever way it stopped. */
+export function isFinished(booking: Booking): boolean {
+  return booking.status === 'Delivered' || booking.status === 'Cancelled';
 }
 
 /**
@@ -335,16 +419,16 @@ export const PRICING = {
   /** Share of declared value charged as insurance. */
   insuranceRate: 0.01,
   /**
-   * Flat fee per doorstep leg. Charged once for a doorstep pickup and again for
-   * a doorstep delivery, so a door-to-door parcel pays it twice. Hub-to-hub
-   * pays nothing extra — that's the base price.
+   * Flat fee per chargeable leg — see `isChargeableHandover` for which those
+   * are. A parcel brought to a hub and delivered to a door pays it twice; one
+   * collected from a public location and met at a hub pays nothing.
    *
    * This is the only optional charge left. Fragile handling is free and carries
    * no surcharge: it's an advisory flag drivers act on, not a paid service.
    * There is no speed tier either — a parcel moves when a driver travelling
    * that route claims it.
    */
-  doorstepSurcharge: 800,
+  handoverSurcharge: 800,
 } as const;
 
 export type FeeInput = {
@@ -352,10 +436,13 @@ export type FeeInput = {
   weight: number;
   declaredValue: number;
   /**
-   * Both default to `hub`, i.e. no doorstep fee. That keeps the headline
-   * "from ₦X" quotes — the rate calculator, the quick quote and the service
-   * catalogue — showing the cheapest honest price, which is what a "from"
-   * figure should be. The booking form passes the real modes.
+   * Both default to the cheapest legal mode for their end — see
+   * `CHEAPEST_HANDOVER` — so the headline "from ₦X" quotes on the rate
+   * calculator, the quick quote and the service catalogue stay honest.
+   *
+   * They used to default to `hub` at both ends, which was the free option until
+   * hub pickup became chargeable. Leaving that default would have quietly added
+   * ₦800 to every "from" price in the app.
    */
   pickupMode?: HandoverMode;
   dropoffMode?: HandoverMode;
@@ -365,10 +452,10 @@ export type FeeBreakdown = {
   base: number;
   weight: number;
   insurance: number;
-  /** Doorstep convenience fee, ₦0 / ₦800 / ₦1,600 depending on the two modes. */
-  doorstep: number;
+  /** Handover fee, ₦0 / ₦800 / ₦1,600 depending on the two legs. */
+  handover: number;
   /** How many legs that covers, so the summary can label the line honestly. */
-  doorstepLegs: number;
+  handoverLegs: number;
   /**
    * Rounding applied to reach a clean ₦50 figure, so the line items always sum
    * to `total`. Never more than ₦49, and ₦0 whenever the parts already land on
@@ -379,9 +466,9 @@ export type FeeBreakdown = {
 };
 
 /**
- * base + weight + insurance, plus a flat doorstep fee per door leg, rounded up
- * to the nearest ₦50 so quotes read cleanly. Invalid or missing numbers count
- * as zero.
+ * base + weight + insurance, plus a flat fee per chargeable handover leg,
+ * rounded up to the nearest ₦50 so quotes read cleanly. Invalid or missing
+ * numbers count as zero.
  *
  * Marking a parcel fragile costs nothing — it only changes how drivers are told
  * to handle it.
@@ -393,20 +480,20 @@ export function estimateFee(input: FeeInput): FeeBreakdown {
   const weight = Math.round(safe(input.weight) * PRICING.perKg[input.deliveryType]);
   const insurance = Math.round(safe(input.declaredValue) * PRICING.insuranceRate);
 
-  const doorstepLegs =
-    (isChargeableHandover(input.pickupMode) ? 1 : 0) +
-    (isChargeableHandover(input.dropoffMode) ? 1 : 0);
-  const doorstep = doorstepLegs * PRICING.doorstepSurcharge;
+  const handoverLegs =
+    (isChargeableHandover(input.pickupMode ?? CHEAPEST_HANDOVER.pickup, 'pickup') ? 1 : 0) +
+    (isChargeableHandover(input.dropoffMode ?? CHEAPEST_HANDOVER.dropoff, 'dropoff') ? 1 : 0);
+  const handover = handoverLegs * PRICING.handoverSurcharge;
 
-  const subtotal = base + weight + insurance + doorstep;
+  const subtotal = base + weight + insurance + handover;
   const total = Math.ceil(subtotal / 50) * 50;
 
   return {
     base,
     weight,
     insurance,
-    doorstep,
-    doorstepLegs,
+    handover,
+    handoverLegs,
     rounding: total - subtotal,
     total,
   };
@@ -480,6 +567,10 @@ export function statusTone(booking: Booking): StatusTone {
   switch (booking.status) {
     case 'Delivered':
       return 'success';
+    case 'Cancelled':
+      // Neutral, not danger. A sender who changed their mind did nothing wrong;
+      // a red badge on their own decision reads as an error they must fix.
+      return 'neutral';
     case 'Booked':
       // Amber while it waits for a driver to claim it.
       return booking.driver ? 'primary' : 'warning';
@@ -524,8 +615,35 @@ function generateTrackingId(): string {
   return `PKG-${random}${sequence.toString().padStart(2, '0')}`;
 }
 
+/**
+ * A parcel with nothing delivered yet.
+ *
+ * Spread rather than repeated so that adding a delivery column later means one
+ * edit here, not one per seed row — and so a missing field is a type error
+ * rather than an `undefined` that reads as "no record" at a glance.
+ */
+const NO_DELIVERY_RECORD = {
+  pickedUpAt: null,
+  deliveredAt: null,
+  receivedBy: null,
+  proofPath: null,
+  proofNote: null,
+  cancelledAt: null,
+  cancellationReason: null,
+} satisfies Pick<
+  Booking,
+  | 'pickedUpAt'
+  | 'deliveredAt'
+  | 'receivedBy'
+  | 'proofPath'
+  | 'proofNote'
+  | 'cancelledAt'
+  | 'cancellationReason'
+>;
+
 const SEED_BOOKINGS: Booking[] = [
   {
+    ...NO_DELIVERY_RECORD,
     id: 'seed-1',
     trackingId: 'PKG-9821',
     deliveryType: 'interstate',
@@ -561,6 +679,7 @@ const SEED_BOOKINGS: Booking[] = [
     createdAt: '2026-08-01T09:30:00.000Z',
   },
   {
+    ...NO_DELIVERY_RECORD,
     id: 'seed-2',
     trackingId: 'PKG-4410',
     deliveryType: 'local',
@@ -596,6 +715,7 @@ const SEED_BOOKINGS: Booking[] = [
     createdAt: '2026-07-31T14:05:00.000Z',
   },
   {
+    ...NO_DELIVERY_RECORD,
     id: 'seed-3',
     trackingId: 'PKG-7305',
     deliveryType: 'interstate',
@@ -631,6 +751,7 @@ const SEED_BOOKINGS: Booking[] = [
     createdAt: '2026-07-28T08:15:00.000Z',
   },
   {
+    ...NO_DELIVERY_RECORD,
     id: 'seed-4',
     trackingId: 'PKG-2288',
     deliveryType: 'local',
@@ -666,6 +787,7 @@ const SEED_BOOKINGS: Booking[] = [
     createdAt: '2026-08-03T07:45:00.000Z',
   },
   {
+    ...NO_DELIVERY_RECORD,
     id: 'seed-5',
     trackingId: 'PKG-6153',
     deliveryType: 'interstate',
@@ -748,7 +870,7 @@ export function BookingsProvider({ children }: { children: ReactNode }) {
       setBookings(await fetchBookings());
       setError(null);
     } catch (thrown) {
-      setError(thrown instanceof Error ? thrown.message : 'Could not load parcels.');
+      setError(errorMessage(thrown, 'Could not load parcels.'));
     } finally {
       setLoading(false);
     }
@@ -792,6 +914,7 @@ export function BookingsProvider({ children }: { children: ReactNode }) {
           driverId: null,
           acceptedAt: null,
           createdAt: new Date().toISOString(),
+          ...NO_DELIVERY_RECORD,
         };
         setBookings((prev) => [booking, ...prev]);
         return booking;
@@ -804,7 +927,7 @@ export function BookingsProvider({ children }: { children: ReactNode }) {
         setError(null);
         return booking;
       } catch (thrown) {
-        setError(thrown instanceof Error ? thrown.message : 'Could not post the parcel.');
+        setError(errorMessage(thrown, 'Could not post the parcel.'));
         return null;
       }
     },
@@ -853,7 +976,7 @@ export function BookingsProvider({ children }: { children: ReactNode }) {
         setError(null);
         return 'claimed';
       } catch (thrown) {
-        setError(thrown instanceof Error ? thrown.message : 'Could not accept the job.');
+        setError(errorMessage(thrown, 'Could not accept the job.'));
         return 'error';
       }
     },
@@ -938,6 +1061,15 @@ function pickupPriority(booking: Booking): number {
       return 5;
     case 'Delivered':
       return 6;
+    /*
+      Last, below Delivered.
+
+      Without this the `default` branch returned 5 — the same rank as a freshly
+      booked parcel — and a cancelled shipment sorted above a delivered one in
+      a list ordered by "needs attention". A cancelled parcel needs none.
+    */
+    case 'Cancelled':
+      return 7;
     default:
       return 5;
   }
@@ -967,6 +1099,25 @@ export function sortByPickupUrgency(bookings: Booking[]): Booking[] {
  * different ways — "Door → Meet" meant nothing to a sender who chose
  * "Public location pickup".
  */
+/**
+ * What the handover fee line should be called for a given pair of modes.
+ *
+ * Centralised because the wording is not derivable from a leg count any more:
+ * one leg could be either end, and "Doorstep · pickup" is now simply wrong —
+ * the chargeable pickup is a hub, not a door.
+ */
+export function handoverFeeLabel(
+  pickupMode: HandoverMode | undefined,
+  dropoffMode: HandoverMode | undefined,
+): string {
+  const parts: string[] = [];
+  if (isChargeableHandover(pickupMode, 'pickup')) parts.push('hub pickup');
+  if (isChargeableHandover(dropoffMode, 'dropoff')) parts.push('doorstep delivery');
+
+  if (parts.length === 0) return 'Handover';
+  return `Handover · ${parts.join(' and ')}`;
+}
+
 export function handoverModeLabel(mode: HandoverMode, end: 'pickup' | 'dropoff'): string {
   if (mode === 'hub') return end === 'pickup' ? 'LOCI hub' : 'LOCI hub (OTP collection)';
   if (mode === 'meetpoint') return 'Public location';
@@ -1090,16 +1241,23 @@ export function activeMovements(
   bookings: Booking[],
   userId: string = SESSION_USER.id,
 ): ActiveMovement[] {
-  return parcelsForUser(bookings, userId)
-    .filter((b) => b.status !== 'Delivered')
-    .map((b) => ({
-      id: b.id,
-      trackingId: b.trackingId,
-      role: (b.driverId === userId ? 'driver' : 'sender') as ActiveRole,
-      destination: `${b.dropoffArea}, ${b.destinationCity}`,
-      recipientName: b.recipientName,
-      driverName: b.driver,
-    }));
+  return (
+    parcelsForUser(bookings, userId)
+      /*
+        Anything still in motion. Cancelled counts as stopped: filtering on
+        `!== 'Delivered'` alone put cancelled parcels in the live ticker,
+        scrolling past as though they were on their way somewhere.
+      */
+      .filter((b) => !isFinished(b))
+      .map((b) => ({
+        id: b.id,
+        trackingId: b.trackingId,
+        role: (b.driverId === userId ? 'driver' : 'sender') as ActiveRole,
+        destination: `${b.dropoffArea}, ${b.destinationCity}`,
+        recipientName: b.recipientName,
+        driverName: b.driver,
+      }))
+  );
 }
 
 /**

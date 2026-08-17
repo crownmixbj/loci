@@ -2,6 +2,7 @@ import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 
+import { errorMessage } from '@/lib/errors';
 import { AuthFooterLink, AuthShell } from '@/components/ui/auth-shell';
 import { Button } from '@/components/ui/button';
 import { PasswordField } from '@/components/ui/password-field';
@@ -51,7 +52,7 @@ export default function SignInScreen() {
     try {
       result = await signIn({ email, password });
     } catch (thrown) {
-      result = { error: thrown instanceof Error ? thrown.message : 'Something went wrong.' };
+      result = { error: errorMessage(thrown, 'Something went wrong.') };
     } finally {
       setPending(false);
     }

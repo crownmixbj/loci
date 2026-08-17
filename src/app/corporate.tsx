@@ -13,7 +13,7 @@ import { Linking, Pressable, ScrollView, StyleSheet, Text, View } from 'react-na
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
-import {FontSize, MaxContentWidth, Radius, Spacing, Typography, font } from '@/constants/theme';
+import { FontSize, MaxContentWidth, Radius, Spacing, Typography, font } from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';
 import { formatNaira, PRICING } from '@/store/bookings';
 

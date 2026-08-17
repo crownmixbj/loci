@@ -10,6 +10,9 @@ import {
   type ReactNode,
 } from 'react';
 
+import AsyncStorage from '@react-native-async-storage/async-storage';
+
+import { errorMessage } from '@/lib/errors';
 import { showToast } from '@/components/ui/toast';
 import { clearAllDrafts } from '@/hooks/use-form-draft';
 import {
@@ -21,6 +24,7 @@ import {
   type DriverApplication,
 } from '@/store/driver-applications';
 import { authErrorMessage, isEmailTakenCode, isSupabaseConfigured, supabase } from '@/lib/supabase';
+import { registerForPush, unregisterPush } from '@/store/push';
 import type { City } from '@/store/bookings';
 
 /**
@@ -83,6 +87,14 @@ export type DriverRegistration = {
   reference: string;
   submittedAt: string;
 };
+
+/**
+ * Where one account's chosen view is remembered.
+ *
+ * Per user id, so signing in as someone else on the same device starts from the
+ * default rather than inheriting a stranger's preference.
+ */
+const activeViewKey = (userId: string) => `loci.activeView.${userId}`;
 
 /** `loading` covers the moment at launch before a stored session is restored. */
 export type SessionStatus = 'loading' | 'signedIn' | 'signedOut';
@@ -210,7 +222,15 @@ function withTimeout<T>(promise: PromiseLike<T>, ms = AUTH_TIMEOUT_MS): Promise<
  * uncaught, which is what stranded the button.
  */
 function thrownMessage(thrown: unknown): string {
-  const raw = thrown instanceof Error ? thrown.message : String(thrown);
+  /*
+   * `errorMessage`, not `String(thrown)`.
+   *
+   * A Supabase failure is a plain object, so `String` on it produces the
+   * literal text "[object Object]" — which then fails every `includes` test
+   * below and falls through to the generic branch. The sign-in screen has been
+   * showing a catch-all for any server-side refusal.
+   */
+  const raw = errorMessage(thrown, String(thrown));
 
   if (raw.toLowerCase().includes('timed out')) {
     return `The server didn't respond. Check your connection, and that EXPO_PUBLIC_SUPABASE_URL points at your project.`;
@@ -265,7 +285,7 @@ export function SessionProvider({
   children: ReactNode;
   initialRole?: SessionRole;
 }) {
-  const [role, setRole] = useState<SessionRole>(initialRole);
+  const [role, setRoleState] = useState<SessionRole>(initialRole);
   const [driver, setDriver] = useState<DriverRegistration | null>(null);
   const [session, setSession] = useState<Session | null>(null);
   const [application, setApplication] = useState<DriverApplication | null>(null);
@@ -319,6 +339,12 @@ export function SessionProvider({
        */
       if (event === 'SIGNED_OUT') {
         greetedUserId.current = null;
+        /*
+         * Forget the stored view for the account that just left, so the next
+         * person on this device is not dropped into their interface.
+         */
+        if (user) void AsyncStorage.removeItem(activeViewKey(user.id)).catch(() => {});
+        restoredViewFor.current = null;
         return;
       }
 
@@ -367,6 +393,32 @@ export function SessionProvider({
      * before the fetch lands.
      */
     setDriverStatusLoaded(true);
+
+    /*
+     * An approved driver's device registers for push here, at sign-in.
+     *
+     * ⚠ This is the one place the "never ask for notifications early" rule in
+     *   `registerForPush` does not apply, and it is worth saying why rather
+     *   than looking like an oversight.
+     *
+     *   The rule exists because a prompt in front of somebody who has not yet
+     *   seen what an app does gets refused, and on iOS a refusal is close to
+     *   permanent. An approved driver is the opposite case: they have filled in
+     *   an application, been vetted, and are opening LOCI to find work. The
+     *   prompt is the app doing the thing they came for.
+     *
+     *   Everyone else — senders, applicants, rejected drivers — is untouched.
+     *   Nothing is offered to them, so there is nothing to notify them about.
+     *
+     * It also refreshes the stored token on every sign-in, which matters
+     * independently of the prompt: Expo tokens are not permanent, and a stale
+     * one is a driver the notifier believes it reached.
+     */
+    if (nextApplication?.status === 'approved') {
+      // Fire and forget. A driver must never wait on a permission dialog to
+      // reach their own home screen.
+      void registerForPush();
+    }
   }, [user]);
 
   /**
@@ -428,10 +480,65 @@ export function SessionProvider({
     });
   }, [user?.id]);
 
-  const toggleRole = useCallback(
-    () => setRole((current) => (current === 'sender' ? 'driver' : 'sender')),
-    [],
+  /**
+   * The active view, remembered per account.
+   *
+   * Keyed by user id rather than stored under one key: a shared device would
+   * otherwise hand the next person to sign in whatever view the last one chose,
+   * and "why am I looking at the driver app?" is a confusing first impression
+   * for someone who has never applied.
+   *
+   * Written after the state update rather than awaited before it, so the
+   * interface switches on the tap. A view preference is not worth a spinner,
+   * and a failed write costs at most the next cold start.
+   */
+  const setRole = useCallback(
+    (next: SessionRole) => {
+      setRoleState(next);
+      if (user) void AsyncStorage.setItem(activeViewKey(user.id), next).catch(() => {});
+    },
+    [user],
   );
+
+  const toggleRole = useCallback(
+    () => setRole(role === 'sender' ? 'driver' : 'sender'),
+    [role, setRole],
+  );
+
+  /*
+   * Restore the stored view when the person changes.
+   *
+   * Keyed on `user?.id` for the same reason `driverStatusLoaded` is: `user` is
+   * derived from the session and gets a new identity on every hourly token
+   * refresh, so keying on the object would re-read storage all day.
+   *
+   * Nothing validates the stored value against approval here. It does not need
+   * to — `resolveExperience` already falls back to the sender interface for
+   * anyone without an approved application, so a stale 'driver' cannot strand
+   * someone whose approval was revoked.
+   */
+  const restoredViewFor = useRef<string | null>(null);
+
+  useEffect(() => {
+    const id = user?.id ?? null;
+    if (restoredViewFor.current === id) return;
+    restoredViewFor.current = id;
+
+    if (!id) {
+      setRoleState(initialRole);
+      return;
+    }
+
+    let active = true;
+    void AsyncStorage.getItem(activeViewKey(id)).then((stored) => {
+      if (!active) return;
+      if (stored === 'sender' || stored === 'driver') setRoleState(stored);
+    });
+
+    return () => {
+      active = false;
+    };
+  }, [user?.id, initialRole]);
 
   const registerDriver = useCallback((registration: DriverRegistration) => {
     setDriver(registration);
@@ -541,6 +648,15 @@ export function SessionProvider({
   }, []);
 
   const signOut = useCallback(async () => {
+    /*
+     * Forget the device before dropping the session.
+     *
+     * `unregisterPush` deletes its own row, which needs the session that is
+     * about to end — so the order here is load-bearing rather than stylistic.
+     * Without it, the next person to sign in on a shared phone keeps receiving
+     * the previous driver's trip offers.
+     */
+    await unregisterPush();
     if (isSupabaseConfigured) await supabase.auth.signOut();
     setSession(null);
     setStatus('signedOut');
@@ -564,6 +680,12 @@ export function SessionProvider({
      * be greeted.
      */
     greetedUserId.current = null;
+    /*
+     * Forget the stored view for the account that just left, so the next
+     * person on this device is not dropped into their interface.
+     */
+    if (user) void AsyncStorage.removeItem(activeViewKey(user.id)).catch(() => {});
+    restoredViewFor.current = null;
   }, []);
 
   const value = useMemo(

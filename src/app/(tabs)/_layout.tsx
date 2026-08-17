@@ -1,12 +1,27 @@
 import { Tabs } from 'expo-router';
 import { StyleSheet, View } from 'react-native';
 
+import { BottomTabBar } from '@/components/ui/bottom-tab-bar';
 import { StickyHeader } from '@/components/ui/sticky-header';
 import { PageCanvas } from '@/constants/theme';
+import { useTopInset } from '@/hooks/use-top-inset';
 
 export default function TabLayout() {
+  const topInset = useTopInset();
+
   return (
-    <View style={[styles.container, { backgroundColor: PageCanvas }]}>
+    /*
+      The status bar is reserved here, once, for every tab screen.
+
+      A native stack with `headerShown: false` hands the screen the whole
+      window — including the strip under the notch and the dynamic island. Every
+      screen in this group starts with a title, so every one of them was drawing
+      that title behind the clock. Doing it per screen means the next screen
+      added forgets, so it lives on the container they all share.
+
+      See `useTopInset` for why this is 0 while the build banner is showing.
+    */
+    <View style={[styles.container, { backgroundColor: PageCanvas, paddingTop: topInset }]}>
       {/*
         Rendered above the navigator, so it survives route changes and stays put
         while screens scroll under it. Shared with screens outside this group —
@@ -27,8 +42,9 @@ export default function TabLayout() {
         }}>
         <Tabs.Screen name="index" options={{ title: 'Home' }} />
         <Tabs.Screen name="book" options={{ title: 'Send Parcel' }} />
-        <Tabs.Screen name="available-packages" options={{ title: 'Find Jobs' }} />
-        <Tabs.Screen name="driver" options={{ title: 'My Jobs' }} />
+        <Tabs.Screen name="available-packages" options={{ title: 'Schedule My Journey' }} />
+        <Tabs.Screen name="driver" options={{ title: 'Assigned Trip' }} />
+        <Tabs.Screen name="driver-wallet" options={{ title: 'Driver Wallet' }} />
         <Tabs.Screen name="driver-signup" options={{ title: 'Drivers' }} />
         <Tabs.Screen name="locations" options={{ title: 'Hubs' }} />
         <Tabs.Screen name="about" options={{ title: 'About Us' }} />
@@ -39,6 +55,15 @@ export default function TabLayout() {
         {/* Reached only after accepting a job — not a nav destination. */}
         <Tabs.Screen name="job-accepted" options={{ title: 'Order Accepted' }} />
       </Tabs>
+
+      {/*
+        The native tab bar. Renders nothing on web, where the capsule above
+        carries navigation instead.
+
+        Outside the navigator so it does not scroll with a screen, and below it
+        in the tree so it paints on top.
+      */}
+      <BottomTabBar />
     </View>
   );
 }

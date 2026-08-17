@@ -9,7 +9,7 @@ import { Card } from '@/components/ui/card';
 import { ChipGroup } from '@/components/ui/chip';
 import { ProgressBar } from '@/components/ui/progress-bar';
 import { EmptyState, screenPadding, ScreenHeader } from '@/components/ui/screen';
-import { Radius, Spacing, Typography, font } from '@/constants/theme';
+import { MaxContentWidth, Radius, Spacing, Typography, font } from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';
 import {
   formatNaira,
@@ -97,7 +97,9 @@ export default function MyPackagesScreen() {
 
   if (!viewerId) {
     return (
-      <ScrollView contentContainerStyle={screenPadding} showsVerticalScrollIndicator={false}>
+      <ScrollView
+        contentContainerStyle={[styles.container, screenPadding]}
+        showsVerticalScrollIndicator={false}>
         <SignedOutState
           title="Sign in to see your parcels"
           message="Your sent parcels and the jobs you're carrying live on your account, so they follow you to any device."
@@ -108,7 +110,9 @@ export default function MyPackagesScreen() {
   }
 
   return (
-    <ScrollView contentContainerStyle={screenPadding} showsVerticalScrollIndicator={false}>
+    <ScrollView
+      contentContainerStyle={[styles.container, screenPadding]}
+      showsVerticalScrollIndicator={false}>
       <ScreenHeader
         title={SECTION_LABELS[section]}
         subtitle={
@@ -231,6 +235,17 @@ function ParcelRow({
 }
 
 const styles = StyleSheet.create({
+  /*
+    The house container. Every full-page route centres at `MaxContentWidth`;
+    this one had no constraint at all, so a desktop stretched a list of parcel
+    cards edge to edge.
+  */
+  container: {
+    flexGrow: 1,
+    alignSelf: 'center',
+    width: '100%',
+    maxWidth: MaxContentWidth,
+  },
   list: {
     gap: Spacing.three - 4,
     marginBottom: Spacing.four,

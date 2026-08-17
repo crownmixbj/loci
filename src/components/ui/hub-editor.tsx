@@ -2,6 +2,7 @@ import { X } from 'lucide-react-native';
 import { useState } from 'react';
 import { Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 
+import { errorMessage } from '@/lib/errors';
 import { Button } from '@/components/ui/button';
 import { showToast } from '@/components/ui/toast';
 import { ToggleRow } from '@/components/ui/dropdown';
@@ -136,7 +137,7 @@ export function HubEditor({
        * says so, and rewriting it as "Something went wrong" would hide that the
        * account simply is not an admin any more.
        */
-      setError(thrown instanceof Error ? thrown.message : 'Could not save the hub.');
+      setError(errorMessage(thrown, 'Could not save the hub.'));
     } finally {
       setSaving(false);
     }

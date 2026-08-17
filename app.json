@@ -1,6 +1,6 @@
 {
   "expo": {
-    "name": "parcel_mobile",
+    "name": "LOCI",
     "slug": "parcel_mobile",
     "version": "1.0.0",
     "orientation": "portrait",
@@ -9,16 +9,45 @@
     "userInterfaceStyle": "automatic",
     "ios": {
       "icon": "./assets/expo.icon",
-      "bundleIdentifier": "com.anonymous.parcel-mobile"
+      "bundleIdentifier": "com.loci.parcel",
+      "supportsTablet": false,
+      "config": {
+        "usesNonExemptEncryption": false
+      },
+      "infoPlist": {
+        "NSCameraUsageDescription": "LOCI uses the camera to photograph a parcel at handover and to capture your driver documents.",
+        "NSPhotoLibraryUsageDescription": "LOCI lets you attach a photo of a parcel or a driver document from your library."
+      },
+      "associatedDomains": [
+        "applinks:REPLACE_WITH_LINK_DOMAIN"
+      ]
     },
     "android": {
+      "package": "com.loci.parcel",
       "adaptiveIcon": {
         "backgroundColor": "#E6F4FE",
         "foregroundImage": "./assets/images/android-icon-foreground.png",
         "backgroundImage": "./assets/images/android-icon-background.png",
         "monochromeImage": "./assets/images/android-icon-monochrome.png"
       },
-      "predictiveBackGestureEnabled": false
+      "predictiveBackGestureEnabled": false,
+      "intentFilters": [
+        {
+          "action": "VIEW",
+          "autoVerify": true,
+          "data": [
+            {
+              "scheme": "https",
+              "host": "REPLACE_WITH_LINK_DOMAIN",
+              "pathPrefix": "/capture"
+            }
+          ],
+          "category": [
+            "BROWSABLE",
+            "DEFAULT"
+          ]
+        }
+      ]
     },
     "web": {
       "output": "static",
@@ -36,12 +65,34 @@
       ],
       "expo-font",
       "expo-image",
+      [
+        "expo-notifications",
+        {
+          "icon": "./assets/images/android-icon-monochrome.png",
+          "color": "#0077B6"
+        }
+      ],
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "LOCI lets you attach a photo of a parcel or a driver document from your library.",
+          "cameraPermission": "LOCI uses the camera to photograph a parcel at handover and to capture your driver documents.",
+          "microphonePermission": false
+        }
+      ],
+      "expo-document-picker",
       "expo-status-bar",
       "expo-web-browser"
     ],
     "experiments": {
       "typedRoutes": true,
       "reactCompiler": true
+    },
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "75625d41-84a6-478e-959c-2d420981d4ad"
+      }
     }
   }
 }

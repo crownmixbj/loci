@@ -1,3 +1,4 @@
+import { errorMessage } from '@/lib/errors';
 import { supabase } from '@/lib/supabase';
 
 /**
@@ -147,18 +148,61 @@ export async function setDrivingBan(
  * account. Parcels survive — the sender's own delivery history is theirs, and
  * destroying it to satisfy someone else's erasure would be the wrong trade.
  *
- * ⚠ Does NOT remove the row from `auth.users`. See the header of
- *   `supabase/09_bans.sql`: two foreign keys make a hard delete destructive
- *   today, and removing the login needs an Edge Function holding the
- *   service_role key.
+ * ⚠ Two steps, and the second is allowed to fail.
+ *
+ *   `erase_person` does the substantive work: every identifying field across
+ *   ten tables, and the stored documents behind them. Removing the *login*
+ *   needs the service key, so it is an Edge Function — and a project that has
+ *   not deployed it can still erase people properly.
+ *
+ *   So a failure at step two does not undo step one, and it does not throw.
+ *   Rolling back a completed scrub because the login survived would leave the
+ *   data in place, which is the outcome erasure exists to prevent. The caller
+ *   is told which of the two happened.
  */
-export async function erasePerson(targetId: string, reason?: string): Promise<void> {
+export type EraseOutcome = {
+  /** The scrub. If this is false, `erasePerson` threw and you never see it. */
+  scrubbed: true;
+  /** Whether the auth login was removed as well. */
+  loginRemoved: boolean;
+  /** Why not, when it was not. Null when the login is gone. */
+  loginError: string | null;
+};
+
+export async function erasePerson(targetId: string, reason?: string): Promise<EraseOutcome> {
   const { error } = await supabase.rpc('erase_person', {
     target_id: targetId,
     note: reason ?? null,
   });
 
   if (error) throw error;
+
+  /*
+   * The login, best effort.
+   *
+   * `invoke` rejects on a non-2xx, and the function answers 501 when a project
+   * has no service key — which is the ordinary state of a fresh deployment, not
+   * an incident. Either way the person's data is already gone.
+   */
+  try {
+    const { error: fnError } = await supabase.functions.invoke('erase-auth-user', {
+      body: { user_id: targetId },
+    });
+
+    if (fnError) {
+      return { scrubbed: true, loginRemoved: false, loginError: fnError.message };
+    }
+    return { scrubbed: true, loginRemoved: true, loginError: null };
+  } catch (thrown) {
+    return {
+      scrubbed: true,
+      loginRemoved: false,
+      loginError: errorMessage(
+        thrown,
+        'The erase-auth-user function is not deployed on this project.',
+      ),
+    };
+  }
 }
 
 /**
@@ -314,4 +358,223 @@ export async function logEvent(
   } catch {
     // Nothing to do. Failing to log must never mask the original failure.
   }
+}
+
+// -------------------------------------------- where the backlog is going ----
+
+export type UnassignedDestination = {
+  city: string;
+  parcels: number;
+  /** Hours the oldest has been waiting. */
+  oldestHours: number;
+  /** How many are currently out with a driver on a live dispatch offer. */
+  offered: number;
+};
+
+/**
+ * Unassigned parcels, grouped by destination.
+ *
+ * "Unclaimed: 14" says there is a problem. This says whether it is fourteen
+ * parcels for Kano or one each across fourteen cities — a different problem
+ * with a different fix, and not derivable from the count.
+ *
+ * `offered` matters as much as the total: a backlog that is being actively
+ * worked by dispatch looks identical to one nobody has touched, unless you
+ * separate them.
+ */
+export async function fetchUnassignedByDestination(): Promise<UnassignedDestination[]> {
+  const { data, error } = await supabase.rpc('admin_unassigned_by_destination');
+  if (error || !data) return [];
+
+  return (data as Record<string, unknown>[]).map((row) => ({
+    city: String(row.city ?? ''),
+    parcels: num(row.parcels),
+    oldestHours: num(row.oldest_hours),
+    offered: num(row.offered),
+  }));
+}
+
+/**
+ * How long the oldest parcel has waited, in words.
+ *
+ * Hours below a day, then days — because "73.4 hours" is a number an operator
+ * has to do arithmetic on, and the arithmetic is the only part that matters.
+ */
+export function waitedLabel(hours: number): string {
+  if (!Number.isFinite(hours) || hours < 0) return '—';
+  if (hours < 1) return 'under an hour';
+  if (hours < 24) return `${Math.round(hours)}h`;
+
+  const days = Math.floor(hours / 24);
+  return days === 1 ? '1 day' : `${days} days`;
+}
+
+// ----------------------------------------------------- parcels, for an admin ---
+
+/**
+ * What an operator sees about a parcel.
+ *
+ * No names and no phone numbers. `admin_parcel_detail` in
+ * `supabase/17_admin_parcel_detail.sql` returns a fixed shape that excludes
+ * them — there is still no admin read policy on `bookings`, so this is the only
+ * way in, and it decides what "the whole parcel" means rather than the caller.
+ */
+export type AdminParcelDetail = {
+  id: string;
+  trackingId: string;
+  status: string;
+  deliveryType: string;
+  originCity: string;
+  destinationCity: string;
+  pickupArea: string;
+  dropoffArea: string;
+  pickupMode: string;
+  dropoffMode: string;
+  weight: number;
+  declaredValue: number;
+  estimatedFee: number;
+  category: string;
+  fragile: boolean;
+  createdAt: string | null;
+  acceptedAt: string | null;
+  pickedUpAt: string | null;
+  deliveredAt: string | null;
+  cancelledAt: string | null;
+  cancellationReason: string | null;
+  driverName: string | null;
+  driverId: string | null;
+  hasSenderPhoto: boolean;
+  livenessStatus: string | null;
+  offersMade: number;
+  offerOutstanding: boolean;
+};
+
+export type AdminParcelRow = {
+  id: string;
+  trackingId: string;
+  status: string;
+  originCity: string;
+  destinationCity: string;
+  weight: number;
+  estimatedFee: number;
+  createdAt: string | null;
+  driverName: string | null;
+  offerOutstanding: boolean;
+};
+
+export type ParcelScope = 'unassigned' | 'assigned' | 'all';
+
+const text = (value: unknown): string => (typeof value === 'string' ? value : '');
+const maybeText = (value: unknown): string | null =>
+  typeof value === 'string' && value.length > 0 ? value : null;
+
+export async function fetchAdminParcels(
+  scope: ParcelScope,
+  city?: string,
+): Promise<AdminParcelRow[]> {
+  const { data, error } = await supabase.rpc('admin_parcels', {
+    scope,
+    city: city ?? null,
+    max_rows: 50,
+  });
+  if (error || !data) return [];
+
+  return (data as Record<string, unknown>[]).map((row) => ({
+    id: text(row.id),
+    trackingId: text(row.tracking_id),
+    status: text(row.status),
+    originCity: text(row.origin_city),
+    destinationCity: text(row.destination_city),
+    weight: num(row.weight),
+    estimatedFee: num(row.estimated_fee),
+    createdAt: maybeText(row.created_at),
+    driverName: maybeText(row.driver_name),
+    offerOutstanding: row.offer_outstanding === true,
+  }));
+}
+
+export async function fetchAdminParcelDetail(id: string): Promise<AdminParcelDetail | null> {
+  const { data, error } = await supabase.rpc('admin_parcel_detail', { booking_id: id });
+  if (error || !data) return null;
+
+  const row = (data as Record<string, unknown>[])[0];
+  if (!row) return null;
+
+  return {
+    id: text(row.id),
+    trackingId: text(row.tracking_id),
+    status: text(row.status),
+    deliveryType: text(row.delivery_type),
+    originCity: text(row.origin_city),
+    destinationCity: text(row.destination_city),
+    pickupArea: text(row.pickup_area),
+    dropoffArea: text(row.dropoff_area),
+    pickupMode: text(row.pickup_mode),
+    dropoffMode: text(row.dropoff_mode),
+    weight: num(row.weight),
+    declaredValue: num(row.declared_value),
+    estimatedFee: num(row.estimated_fee),
+    category: text(row.category),
+    fragile: row.fragile === true,
+    createdAt: maybeText(row.created_at),
+    acceptedAt: maybeText(row.accepted_at),
+    pickedUpAt: maybeText(row.picked_up_at),
+    deliveredAt: maybeText(row.delivered_at),
+    cancelledAt: maybeText(row.cancelled_at),
+    cancellationReason: maybeText(row.cancellation_reason),
+    driverName: maybeText(row.driver_name),
+    driverId: maybeText(row.driver_id),
+    hasSenderPhoto: row.has_sender_photo === true,
+    livenessStatus: maybeText(row.liveness_status),
+    offersMade: num(row.offers_made),
+    offerOutstanding: row.offer_outstanding === true,
+  };
+}
+
+export type ParcelContacts = {
+  pickupContactName: string;
+  senderPhone: string;
+  pickupAddress: string;
+  recipientName: string;
+  recipientPhone: string;
+  dropoffAddress: string;
+};
+
+/**
+ * The names, numbers and addresses — and a line in the audit log naming the
+ * admin who asked and the parcel they asked about.
+ *
+ * Deliberately a second call. Folding it into the detail fetch would put a
+ * customer's home address on screen every time somebody opened a stuck parcel,
+ * and would fill the audit log with entries nobody could act on.
+ */
+export async function revealParcelContacts(
+  id: string,
+  reason?: string,
+): Promise<ParcelContacts | null> {
+  const { data, error } = await supabase.rpc('admin_reveal_parcel_contacts', {
+    booking_id: id,
+    reason: reason?.trim() || null,
+  });
+  if (error || !data) return null;
+
+  const row = (data as Record<string, unknown>[])[0];
+  if (!row) return null;
+
+  return {
+    pickupContactName: text(row.pickup_contact_name),
+    senderPhone: text(row.sender_phone),
+    pickupAddress: text(row.pickup_address),
+    recipientName: text(row.recipient_name),
+    recipientPhone: text(row.recipient_phone),
+    dropoffAddress: text(row.dropoff_address),
+  };
+}
+
+/** How long a parcel has been waiting, from its creation timestamp. */
+export function ageLabel(createdAt: string | null, now: Date = new Date()): string {
+  if (!createdAt) return '—';
+  const ms = now.getTime() - Date.parse(createdAt);
+  if (!Number.isFinite(ms) || ms < 0) return '—';
+  return waitedLabel(ms / 3_600_000);
 }

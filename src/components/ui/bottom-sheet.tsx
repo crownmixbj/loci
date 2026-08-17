@@ -12,6 +12,18 @@ export type BottomSheetProps = {
   maxHeight?: `${number}%`;
 };
 
+/*
+ * ⚠ This component already scrolls its children.
+ *
+ *   Do not put a `ScrollView` inside it. Two vertical scroll containers nested
+ *   with no bounded height between them collapse the inner one — on
+ *   react-native-web the sheet then opens and appears empty, which reads to a
+ *   user as the control that opened it not working.
+ *
+ *   Pass a plain `View`. `contentContainerStyle` below supplies the padding a
+ *   caller would otherwise reach for a ScrollView to get.
+ */
+
 export function BottomSheet({ visible, onClose, children, maxHeight = '86%' }: BottomSheetProps) {
   const theme = useTheme();
   const insets = useSafeAreaInsets();

@@ -1,0 +1,269 @@
+import { errorMessage } from '@/lib/errors';
+import { NIN_LENGTH } from '@/constants/driver-validation';
+import { supabase } from '@/lib/supabase';
+import { contentTypeFor, extensionOf, readFileBytes } from '@/lib/upload';
+
+/**
+ * Sender identity: one full check, then a face.
+ *
+ * ⚠ Everything here processes biometric data to identify a person, which the
+ *   NDPA treats as sensitive personal data. `supabase/28_sender_identity.sql`
+ *   carries the full note, including the fact that nothing deletes a reference
+ *   photo and that this is LEGAL_REVIEW_REQUIRED.
+ */
+
+export type IdentityStatus = 'unverified' | 'pending' | 'verified' | 'flagged';
+
+export type SenderIdentity = {
+  status: IdentityStatus;
+  /** Whether there is a master photo to compare a new selfie against. */
+  hasReference: boolean;
+  /** Last four digits only. The full NIN never leaves the server. */
+  ninLast4: string | null;
+  confidence: number | null;
+  environment: 'sandbox' | 'production' | null;
+  checkedAt: string | null;
+};
+
+/**
+ * What a sender is asked for on this shipment.
+ *
+ *   onboarding  NIN, NIN slip and a selfie. Once, on the first parcel.
+ *   selfie      a selfie, compared against the master photo.
+ *   capture     a selfie, with nothing to compare it to.
+ *
+ * ⚠ `capture` is the state that is easy to forget, and leaving it out is a bug
+ *   I made in the SQL before the harness caught it. A flagged account has been
+ *   through onboarding — so it must not be sent round again — but its selfie
+ *   was never confirmed, so it was never promoted to reference. There is
+ *   nothing to compare against until a human resolves the flag.
+ */
+export type VerificationPath = 'onboarding' | 'selfie' | 'capture';
+
+export function verificationPath(identity: SenderIdentity | null): VerificationPath {
+  if (!identity) return 'onboarding';
+
+  /*
+   * `pending` means they started and did not finish. Onboarding again is right:
+   * treating it as done would skip the check for everyone who abandoned partway
+   * through, which is the population most worth checking.
+   */
+  if (identity.status === 'unverified' || identity.status === 'pending') return 'onboarding';
+
+  return identity.hasReference ? 'selfie' : 'capture';
+}
+
+/** What the booking form tells the sender they are about to be asked for. */
+export function pathExplanation(path: VerificationPath): string {
+  switch (path) {
+    case 'onboarding':
+      return 'First parcel only: your NIN, a photo of your NIN slip, and a selfie. After this we only ask for the selfie.';
+    case 'selfie':
+      return 'A quick selfie, checked against the photo you gave when you joined.';
+    case 'capture':
+      return 'A quick selfie. Your details are still being reviewed, so this one is recorded rather than matched.';
+  }
+}
+
+type IdentityRow = {
+  status: string;
+  nin: string | null;
+  reference_path: string | null;
+  confidence: number | string | null;
+  environment: string | null;
+  checked_at: string | null;
+};
+
+/**
+ * This account's identity state.
+ *
+ * Returns null when there is no row — a sender who has never posted a parcel.
+ * The NIN comes back only as its last four digits; RLS lets the owner read
+ * their own row, and there is no reason for the whole number to sit in app
+ * memory to render a masked string.
+ */
+export async function fetchSenderIdentity(): Promise<SenderIdentity | null> {
+  const { data, error } = await supabase
+    .from('sender_identity')
+    .select('status, nin, reference_path, confidence, environment, checked_at')
+    .maybeSingle();
+
+  if (error || !data) return null;
+
+  const row = data as IdentityRow;
+  return {
+    status: (row.status as IdentityStatus) ?? 'unverified',
+    hasReference: row.reference_path !== null,
+    ninLast4: row.nin ? row.nin.slice(-4) : null,
+    confidence: row.confidence === null ? null : Number(row.confidence),
+    environment: (row.environment as SenderIdentity['environment']) ?? null,
+    checkedAt: row.checked_at,
+  };
+}
+
+// ------------------------------------------------------------- validation --
+
+/**
+ * Whether a string could be a NIN.
+ *
+ * Eleven digits, and that is genuinely all that can be checked offline: NIMC
+ * publishes no check digit, so any eleven digits are structurally valid. The
+ * only real check is the one the provider does, which is why this refuses
+ * nothing beyond an obvious typo.
+ */
+export function ninError(raw: string): string | null {
+  const digits = normalizeNin(raw);
+
+  if (digits.length === 0) return `Enter your ${NIN_LENGTH}-digit NIN.`;
+  if (digits.length !== NIN_LENGTH) {
+    return `A NIN is ${NIN_LENGTH} digits — you have ${digits.length}.`;
+  }
+
+  return null;
+}
+
+/** Digits only, which is how it is stored and sent. */
+export const normalizeNin = (raw: string): string => raw.replace(/\D/g, '');
+
+/**
+ * What the field is allowed to hold while somebody is typing.
+ *
+ * ⚠ The cap belongs on the *input*, not only on the validator.
+ *
+ *   This field shipped with `maxLength={14}` and no digit mask, so a sender
+ *   could type fourteen characters — or paste a number with spaces in it — and
+ *   learn on submit that a NIN is eleven digits. `ninError` was correct all
+ *   along and it was the wrong place to find out: the person had already
+ *   finished the form.
+ *
+ *   Masking here makes "more than eleven" structurally impossible rather than
+ *   merely refused. Fewer than eleven is still possible mid-typing, which is
+ *   exactly right — a field that complained on the third keystroke would be
+ *   shouting at somebody who has not finished.
+ *
+ *   The driver signup form has done this since it shipped; this is the sender
+ *   path catching up, and `NIN_LENGTH` is shared so the two cannot drift.
+ */
+export const maskNinInput = (raw: string): string => normalizeNin(raw).slice(0, NIN_LENGTH);
+
+/** For display: `•••• •••• 8901`. The full number is never rendered. */
+export function maskNin(last4: string | null): string {
+  return last4 ? `•••• •••• ${last4}` : 'Not on file';
+}
+
+// -------------------------------------------------------------- the flow ---
+
+export type OnboardingInput = {
+  nin: string;
+  /** Local URI of the NIN slip photo or PDF. */
+  slipUri: string;
+  /** The capture session holding the live selfie. */
+  sessionId: string;
+};
+
+export type IdentityOutcome =
+  | { ok: true; status: 'verified' | 'flagged' | 'unavailable'; message: string }
+  | { ok: false; error: string };
+
+/**
+ * Uploads the slip, records the NIN, then asks the server to run the check.
+ *
+ * The upload and the record happen before the provider is called, so a Dojah
+ * outage never costs the sender their typing. `begin_identity_check` is
+ * idempotent per account — re-running it replaces the slip and clears any old
+ * verdict.
+ */
+export async function submitOnboarding(input: OnboardingInput): Promise<IdentityOutcome> {
+  const { data: auth } = await supabase.auth.getUser();
+  const userId = auth.user?.id;
+  if (!userId) return { ok: false, error: 'Sign in first.' };
+
+  const nin = normalizeNin(input.nin);
+  const invalid = ninError(nin);
+  if (invalid) return { ok: false, error: invalid };
+
+  // `<user_id>/…` — storage RLS and `begin_identity_check` both require it.
+  const slipPath = `${userId}/slip-${Date.now()}.${extensionOf(input.slipUri)}`;
+
+  try {
+    const { bytes, contentType } = await readFileBytes(
+      input.slipUri,
+      contentTypeFor(input.slipUri),
+    );
+
+    const upload = await supabase.storage
+      .from('sender-identity')
+      .upload(slipPath, bytes, { contentType, upsert: false });
+
+    if (upload.error) return { ok: false, error: upload.error.message };
+  } catch (thrown) {
+    return {
+      ok: false,
+      error: errorMessage(thrown, 'Could not read that file.'),
+    };
+  }
+
+  const begun = await supabase.rpc('begin_identity_check', {
+    sender_nin: nin,
+    sender_slip_path: slipPath,
+  });
+  if (begun.error) return { ok: false, error: begun.error.message };
+
+  return runIdentityCheck(input.sessionId);
+}
+
+/**
+ * Asks the server to verify a captured selfie.
+ *
+ * Only the session id goes over the wire, in either mode. The image is read
+ * server-side from a private bucket, so a client cannot substitute a photo for
+ * one it did not capture, and no face travels through app memory it does not
+ * need to.
+ *
+ * ⚠ Never returns `{ ok: false }` for a mismatch.
+ *
+ *   A failed match is an *outcome*, not an error: the parcel still posts and
+ *   the account is flagged for a human. Returning an error here would put a
+ *   red banner in front of a sender for a decision nobody has made, and callers
+ *   would reasonably block the shipment on it.
+ */
+export async function runIdentityCheck(sessionId: string): Promise<IdentityOutcome> {
+  const { data, error } = await supabase.functions.invoke('verify-identity', {
+    body: { session_id: sessionId },
+  });
+
+  /*
+   * A transport failure is 'unavailable', not a refusal.
+   *
+   * Dojah being unreachable says nothing about the sender. The selfie is
+   * already stored, so the check can be re-run later without asking them for
+   * anything again.
+   */
+  if (error) {
+    return {
+      ok: true,
+      status: 'unavailable',
+      message: 'We could not check your photo just now. Your parcel is not held up.',
+    };
+  }
+
+  const status = (data as { status?: string } | null)?.status;
+
+  if (status === 'verified') {
+    return { ok: true, status: 'verified', message: 'Identity confirmed.' };
+  }
+  if (status === 'flagged') {
+    return {
+      ok: true,
+      status: 'flagged',
+      message:
+        'We could not match that photo. Your parcel still goes ahead and someone will check.',
+    };
+  }
+
+  return {
+    ok: true,
+    status: 'unavailable',
+    message: 'We could not check your photo just now. Your parcel is not held up.',
+  };
+}

@@ -109,7 +109,7 @@ export const FAQS: Faq[] = [
     key: 'paid',
     question: 'When and how do I get paid?',
     answer:
-      'Payouts go to the bank account on your application. The figure on a job is the fare quoted to the sender, and the Driver Portal shows it as expected payout, not as money already earned — there is no payout ledger in the app yet, so treat those figures as what a job is worth rather than a balance.',
+      'Delivering a parcel credits your Driver Wallet, net of LOCI’s commission. New money sits on a short security hold, then you can request a payout to the bank account on your application — LOCI makes that transfer by hand, so it is not instant. The figure shown on a job is the gross fare quoted to the sender and will always be higher than what lands in your wallet; the Wallet balance is the one to trust.',
   },
   {
     key: 'edit-details',

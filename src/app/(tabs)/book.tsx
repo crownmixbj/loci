@@ -38,15 +38,23 @@ import { Dropdown, ToggleRow } from '@/components/ui/dropdown';
 import { Field } from '@/components/ui/field';
 import { ModeSelector, type ModeOption } from '@/components/ui/mode-selector';
 import { PhotoPicker } from '@/components/ui/photo-picker';
-import { LocationPicker } from '@/components/ui/location-picker';
+import { resolveSenderPhoto, SenderPhotoSheet } from '@/components/ui/sender-photo-sheet';
 import { SelectableUpgradeCard } from '@/components/ui/selectable-upgrade-card';
 import { ValidatedPhoneInput } from '@/components/ValidatedPhoneInput';
-import { screenPadding, ScreenHeader, SectionLabel } from '@/components/ui/screen';
-import {FontSize, MaxContentWidth, Radius, Spacing, Typography, font } from '@/constants/theme';
+import { ScreenHeader, SectionLabel } from '@/components/ui/screen';
+import { FontSize, MaxContentWidth, Radius, Spacing, Typography, font } from '@/constants/theme';
 import { findHub, hubLabel, hubsForCity, type Hub } from '@/constants/hubs';
 import { useHubs } from '@/store/hubs';
-import { HUB_COORDINATES } from '@/constants/hub-coordinates';
 import { useTheme } from '@/hooks/use-theme';
+import { isSupabaseConfigured } from '@/lib/supabase';
+import { IdentityOnboarding } from '@/components/ui/identity-onboarding';
+import { consumeCaptureSession } from '@/store/capture-session';
+import {
+  fetchSenderIdentity,
+  ninError,
+  verificationPath,
+  type SenderIdentity,
+} from '@/store/identity';
 import { isValidNigerianPhone, nigerianPhoneError } from '@/utils/validation';
 import {
   areasForCity,
@@ -59,6 +67,7 @@ import {
   formatAmountInput,
   dropoffSummaryLine,
   formatNaira,
+  handoverFeeLabel,
   handoverModeLabel,
   parseAmountInput,
   pickupSummaryLine,
@@ -81,20 +90,32 @@ const DELIVERY_TYPE_TITLES: Record<DeliveryType, string> = {
  * rather than left to appear in the summary — the surcharge is the main reason
  * to pick one over the other.
  */
-const DOORSTEP_BADGE = `+${formatNaira(PRICING.doorstepSurcharge)}`;
+const SURCHARGE_BADGE = `+${formatNaira(PRICING.handoverSurcharge)}`;
 
+/**
+ * The two ways a parcel leaves the sender — and the surcharge now sits on the
+ * hub, not on the driver run.
+ *
+ * That is the opposite of what it costs LOCI to serve, and deliberately so: a
+ * hub drop-off means someone queueing at a counter LOCI has to staff, while a
+ * driver already travelling the route can collect from a public place at no
+ * extra cost. The fee steers senders towards the cheaper operation.
+ *
+ * The free option is listed first, because the first card is the one people
+ * take when they are not reading closely.
+ */
 const PICKUP_MODES: readonly ModeOption<HandoverMode>[] = [
-  {
-    value: 'hub',
-    label: 'LOCI hub',
-    description: 'Driver to collect from the selected LOCI hub. Zero drop-off fees.',
-    badge: 'Included',
-  },
   {
     value: 'doorstep',
     label: 'Public location pickup',
-    description: 'A driver collects from your proposed public location',
-    badge: DOORSTEP_BADGE,
+    description: 'A driver collects from your proposed public location.',
+    badge: 'Included',
+  },
+  {
+    value: 'hub',
+    label: 'LOCI hub',
+    description: 'You bring the parcel to the selected LOCI hub yourself.',
+    badge: SURCHARGE_BADGE,
   },
 ];
 
@@ -135,11 +156,6 @@ type BookingForm = {
   dropoffAddress: string;
   recipientName: string;
   recipientPhone: string;
-  /** Exact handover points, dropped on a map. Null until the sender places one. */
-  pickupLat: number | null;
-  pickupLng: number | null;
-  dropoffLat: number | null;
-  dropoffLng: number | null;
   itemDescription: string;
   /** Local URI from the picker, or '' when no photo is attached. */
   itemPhotoUri: string;
@@ -171,10 +187,6 @@ const INITIAL_FORM: BookingForm = {
   dropoffAddress: '',
   recipientName: '',
   recipientPhone: '',
-  pickupLat: null,
-  pickupLng: null,
-  dropoffLat: null,
-  dropoffLng: null,
   itemDescription: '',
   itemPhotoUri: '',
   category: 'Electronics',
@@ -185,17 +197,6 @@ const INITIAL_FORM: BookingForm = {
 };
 
 const normalizePhone = (value: string) => value.replace(/[\s()-]/g, '');
-
-/**
- * Where the map opens before a pin exists.
- *
- * The city the sender already chose, not the geographic middle of Nigeria —
- * otherwise every sender starts by panning several hundred kilometres.
- */
-function cityCenter(city: City): { lat: number; lng: number } {
-  const point = HUB_COORDINATES[city];
-  return { lat: point.lat, lng: point.lon };
-}
 
 /**
  * `hubs` is passed in rather than read from a module constant.
@@ -352,7 +353,42 @@ export default function BookScreen() {
   }, [draftReady, form, saveDraft]);
   const [errors, setErrors] = useState<FieldErrors>({});
 
+  /*
+   * ---------- Identity ----------
+   *
+   * ⚠ Held apart from `form`, deliberately, and this is the important part.
+   *
+   *   Everything in `form` is written to an on-device draft on every keystroke
+   *   (`useFormDraft` above) so four sections of typing survive a sign-in
+   *   redirect. A NIN in there would be a government identifier cached in
+   *   AsyncStorage, unencrypted, on a phone that may be shared or resold — and
+   *   it would sit there until the draft expired.
+   *
+   *   Identity also belongs to the *account*, not to the parcel. A second
+   *   shipment does not re-ask for it, so it was never form state.
+   */
+  const [identity, setIdentity] = useState<SenderIdentity | null>(null);
+  const [nin, setNin] = useState('');
+  const [slipUri, setSlipUri] = useState('');
+  const [identityErrors, setIdentityErrors] = useState<{ nin?: string; slip?: string }>({});
+
+  const identityPath = verificationPath(identity);
+
+  useEffect(() => {
+    let cancelled = false;
+    void fetchSenderIdentity().then((found) => {
+      if (!cancelled) setIdentity(found);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   const scrollRef = useRef<ScrollView>(null);
+
+  /** The photo step shown by `handleSubmit`, and whether it is mid-post. */
+  const [photoOpen, setPhotoOpen] = useState(false);
+  const [posting, setPosting] = useState(false);
   const declaredValueRef = useRef<TextInput>(null);
   const itemCardY = useRef(0);
   /** Guards against re-applying the prefill on every re-render. */
@@ -572,7 +608,25 @@ export default function BookScreen() {
     const nextErrors = validate(form, allHubs);
     setErrors(nextErrors);
 
-    if (Object.keys(nextErrors).length > 0) {
+    /*
+     * Identity is validated beside the form, not inside `validate`.
+     *
+     * `validate` takes the booking and returns errors keyed on booking fields;
+     * threading an account-level concern through it would mean every caller of
+     * a pure function about parcels had to know about NINs. It also only
+     * applies on the first parcel, which `validate` has no way to know.
+     */
+    const nextIdentityErrors: { nin?: string; slip?: string } = {};
+
+    if (identityPath === 'onboarding') {
+      const badNin = ninError(nin);
+      if (badNin) nextIdentityErrors.nin = badNin;
+      if (!slipUri) nextIdentityErrors.slip = 'Add a photo of your NIN slip.';
+    }
+
+    setIdentityErrors(nextIdentityErrors);
+
+    if (Object.keys(nextErrors).length + Object.keys(nextIdentityErrors).length > 0) {
       showDialog('Check the form', 'Some required details are missing or invalid.');
       return;
     }
@@ -583,7 +637,7 @@ export default function BookScreen() {
      * bookable, and loses everything they typed if they bounce out. Here the
      * form is already complete and the state survives the round trip.
      */
-    requireAuth(() => void postParcel(), {
+    requireAuth(() => setPhotoOpen(true), {
       title: 'Sign in to post this parcel',
       reason:
         'A parcel needs an owner: it is how you track it, and how the driver knows who to call at pickup. Your details stay filled in.',
@@ -591,8 +645,45 @@ export default function BookScreen() {
     });
   };
 
+  /*
+   * The photo step, between a valid form and a posted parcel.
+   *
+   * Deliberately last. Asking for a photo before someone knows the fare, or
+   * before they know the form even validates, is asking for a face in exchange
+   * for nothing. By this point the parcel is one tap from being posted.
+   *
+   * There is no decline path. The sheet always produces a photo — either a
+   * local image or a capture session the phone completed — and backing out
+   * returns to the form rather than posting without one.
+   */
+  const handlePhotoDone = async (result: { uri: string } | { sessionId: string }) => {
+    setPosting(true);
+    try {
+      /*
+       * Both paths converge on a session id before the parcel is posted, so
+       * `postParcel` has one thing to attach and one failure mode. A browser
+       * camera shot opens its own session here; a phone capture already has
+       * one.
+       */
+      const resolved = await resolveSenderPhoto(result);
+
+      if (!resolved.ok) {
+        showDialog(
+          'The photo did not upload',
+          `${resolved.error} Your details are still here — try again.`,
+        );
+        return;
+      }
+
+      await postParcel(resolved.sessionId);
+    } finally {
+      setPosting(false);
+      setPhotoOpen(false);
+    }
+  };
+
   /** Runs only once we know who is posting. */
-  const postParcel = async () => {
+  const postParcel = async (photoSessionId: string) => {
     // TODO: replace with an API call; the store is the local source of truth for now.
     const booking = await addBooking({
       deliveryType: form.deliveryType,
@@ -616,10 +707,21 @@ export default function BookScreen() {
             })(),
       dropoffArea: destinationArea,
       dropoffAddress: form.dropoffMode === 'hub' ? '' : form.dropoffAddress.trim(),
-      pickupLat: form.pickupLat,
-      pickupLng: form.pickupLng,
-      dropoffLat: form.dropoffLat,
-      dropoffLng: form.dropoffLng,
+      /*
+        No coordinates from this form any more.
+
+        Both map pickers are gone: a pin dropped on an OpenStreetMap tile in a
+        Nigerian city is often off by a street or more, and a sender who placed
+        one trusted it over the address they had typed. The written address is
+        the thing a driver can actually act on.
+
+        The columns stay, because parcels posted before this change carry real
+        pins and the tracking map still draws those.
+      */
+      pickupLat: null,
+      pickupLng: null,
+      dropoffLat: null,
+      dropoffLng: null,
       pickupContactName: form.pickupContactName.trim(),
       senderPhone: normalizePhone(form.senderPhone),
       recipientName: form.recipientName.trim(),
@@ -647,6 +749,27 @@ export default function BookScreen() {
       return;
     }
 
+    /*
+     * Attach the photo, now that there is a parcel to attach it to.
+     *
+     * The upload already happened — `resolveSenderPhoto` did it against the
+     * capture session, which exists precisely because there was no booking row
+     * yet. All that is left is to spend the session on this parcel, which the
+     * server allows exactly once.
+     *
+     * A failure here is swallowed rather than raised. The parcel is already
+     * posted and the photo is already stored; sending the sender back to a
+     * completed form would lose the parcel in order to save the link to it.
+     * The orphaned session is visible in the admin log.
+     */
+    if (isSupabaseConfigured) {
+      try {
+        await consumeCaptureSession(photoSessionId, booking.id);
+      } catch {
+        // Photo stored, link not made. Recoverable by hand; the parcel is safe.
+      }
+    }
+
     // Posted and stored — the draft has done its job.
     void clearDraft();
     setForm(INITIAL_FORM);
@@ -668,17 +791,32 @@ export default function BookScreen() {
     <KeyboardAvoidingView
       style={[styles.flex, { backgroundColor: theme.background }]}
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-      <ScrollView
-        ref={scrollRef}
-        contentContainerStyle={[styles.container, screenPadding]}
-        keyboardShouldPersistTaps="handled"
-        keyboardDismissMode="on-drag">
-        <View style={styles.content}>
-          <ScreenHeader
-            brand={false}
-            title="Post a Parcel"
-            subtitle="Four short sections. You'll see the fee before you confirm."
-          />
+      {/*
+        Pinned: the title and the delivery type.
+
+        A *sibling* of the scroll container rather than its first child — the
+        same arrangement `StickyHeaderScreen` uses, and the only one that keeps
+        a block still while content moves under it without React Native needing
+        a concept of `position: sticky`.
+
+        The delivery type is pinned along with the title rather than left in the
+        form because it is not a form field: it changes the price line, which
+        fields appear below, and which cities are selectable. Scrolling it out
+        of sight leaves you filling in a form with no visible indication of
+        which of the two it is.
+
+        There is no subtitle. "Four short sections" described the form rather
+        than telling anyone anything they could act on, and it cost two lines of
+        a block that is now on screen permanently. The fee still appears above
+        the confirm button, which was the only promise in that sentence.
+      */}
+      <View
+        style={[
+          styles.pinned,
+          { backgroundColor: theme.background, borderBottomColor: theme.border },
+        ]}>
+        <View style={styles.pinnedInner}>
+          <ScreenHeader brand={false} title="Post a Parcel" />
 
           {/* 1 — Delivery type */}
           <View>
@@ -695,7 +833,16 @@ export default function BookScreen() {
                 : `Between two cities · base ${formatNaira(PRICING.base.interstate)} + ${formatNaira(PRICING.perKg.interstate)}/kg`}
             </Text>
           </View>
+        </View>
+      </View>
 
+      <ScrollView
+        ref={scrollRef}
+        style={styles.flex}
+        contentContainerStyle={[styles.container, styles.scrollContent]}
+        keyboardShouldPersistTaps="handled"
+        keyboardDismissMode="on-drag">
+        <View style={styles.content}>
           {/* 2 — Item details */}
           <Card
             style={styles.card}
@@ -874,22 +1021,6 @@ export default function BookScreen() {
               />
             )}
 
-            {/* Only for a public-location pickup — a hub already has an address. */}
-            {form.pickupMode !== 'hub' && (
-              <LocationPicker
-                label="Pickup point on the map"
-                hint="Optional, but it's what lets the driver find you rather than the street."
-                tone="pickup"
-                lat={form.pickupLat}
-                lng={form.pickupLng}
-                center={cityCenter(form.originCity)}
-                onChange={(position) => {
-                  setField('pickupLat', position?.lat ?? null);
-                  setField('pickupLng', position?.lng ?? null);
-                }}
-              />
-            )}
-
             <Field
               label={form.pickupMode === 'hub' ? 'Who is dropping it off?' : 'Contact person'}
               icon={(color, size) => <UserRound color={color} size={size} />}
@@ -910,6 +1041,35 @@ export default function BookScreen() {
               value={form.senderPhone}
               onChangeText={(text) => setField('senderPhone', text)}
               showError={Boolean(errors.senderPhone)}
+            />
+
+            {/*
+              ---------- Identity ----------
+
+              ⚠ Placed under Pickup, directly after the phone, because that is
+                where it was asked for. Worth knowing what sits either side of
+                it, though:
+
+                The field above is `pickupContactName` — "who hands over the
+                parcel" — which is often a shop assistant or a relative rather
+                than the account holder. The NIN below belongs to the *account*:
+                it is checked against the signed-in user's selfie and stored
+                against their account, not against whoever is standing at the
+                door. The labels say so explicitly, because a NIN field sitting
+                under a box that says "Contact person" otherwise invites the
+                wrong person's number.
+
+              Shows the full form on the first parcel and one line after that.
+            */}
+            <IdentityOnboarding
+              path={identityPath}
+              identity={identity}
+              nin={nin}
+              onNin={setNin}
+              ninError={identityErrors.nin}
+              slipUri={slipUri}
+              onSlip={setSlipUri}
+              slipError={identityErrors.slip}
             />
           </Card>
 
@@ -950,7 +1110,7 @@ export default function BookScreen() {
               onUpgradedChange={(on) => setField('dropoffMode', on ? 'doorstep' : 'meetpoint')}
               upgradeLabel={DOORSTEP_DROPOFF.upgradeLabel}
               upgradeHint={DOORSTEP_DROPOFF.upgradeHint}
-              badge={DOORSTEP_BADGE}
+              badge={SURCHARGE_BADGE}
               icon={(color, size) => <Navigation color={color} size={size} />}
             />
 
@@ -1009,25 +1169,6 @@ export default function BookScreen() {
                 onChangeText={(text) => setField('dropoffAddress', text)}
                 error={errors.dropoffAddress}
                 multiline
-              />
-            )}
-
-            {/*
-              Optional, and only where a pin means something: a hub drop-off is
-              already a known location with a known address.
-            */}
-            {form.dropoffMode !== 'hub' && (
-              <LocationPicker
-                label="Drop-off point on the map"
-                hint="Optional, but it's what lets the driver navigate to the exact spot."
-                tone="dropoff"
-                lat={form.dropoffLat}
-                lng={form.dropoffLng}
-                center={cityCenter(isLocal ? form.originCity : form.destinationCity)}
-                onChange={(position) => {
-                  setField('dropoffLat', position?.lat ?? null);
-                  setField('dropoffLng', position?.lng ?? null);
-                }}
               />
             )}
 
@@ -1167,11 +1308,15 @@ export default function BookScreen() {
             {fee.insurance > 0 && (
               <CostRow label="Insurance · 1% of declared value" value={fee.insurance} />
             )}
-            {/* Absent entirely at hub-to-hub, which is the point of the line. */}
-            {fee.doorstep > 0 && (
+            {/*
+              Absent entirely when neither leg is chargeable — a public-location
+              pickup met at a hub, which is now the cheapest route through this
+              form and the one the pricing is meant to steer people towards.
+            */}
+            {fee.handover > 0 && (
               <CostRow
-                label={`Doorstep · ${fee.doorstepLegs === 2 ? 'pickup and delivery' : fee.doorstepLegs === 1 && form.pickupMode === 'doorstep' ? 'pickup' : 'delivery'}`}
-                value={fee.doorstep}
+                label={handoverFeeLabel(form.pickupMode, form.dropoffMode)}
+                value={fee.handover}
               />
             )}
 
@@ -1196,6 +1341,13 @@ export default function BookScreen() {
           />
         </View>
       </ScrollView>
+
+      <SenderPhotoSheet
+        visible={photoOpen}
+        busy={posting}
+        onCancel={() => setPhotoOpen(false)}
+        onDone={handlePhotoDone}
+      />
     </KeyboardAvoidingView>
   );
 }
@@ -1251,6 +1403,38 @@ const styles = StyleSheet.create({
   container: {
     flexGrow: 1,
     alignItems: 'center',
+  },
+  /**
+   * The pinned block.
+   *
+   * `screenPadding` is not reused here because it carries a bottom padding
+   * meant for the end of a scrolling page — 64px of empty space under the
+   * delivery type would push the form off a small screen.
+   *
+   * The hairline underneath is what makes the pinning legible: without it the
+   * form appears to slide into the title rather than under it.
+   */
+  pinned: {
+    paddingHorizontal: Spacing.four,
+    paddingTop: Spacing.four,
+    paddingBottom: Spacing.three,
+    alignItems: 'center',
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    zIndex: 2,
+  },
+  pinnedInner: {
+    width: '100%',
+    maxWidth: MaxContentWidth,
+    gap: Spacing.three,
+  },
+  /**
+   * Less top padding than `screenPadding`: the pinned block above already
+   * provides the separation, and repeating it opens a visible gap.
+   */
+  scrollContent: {
+    paddingHorizontal: Spacing.four,
+    paddingTop: Spacing.three,
+    paddingBottom: Spacing.six,
   },
   content: {
     width: '100%',

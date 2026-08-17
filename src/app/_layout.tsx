@@ -13,6 +13,8 @@ import { useEffect } from 'react';
 import { View } from 'react-native';
 
 import { AnimatedSplashOverlay } from '@/components/animated-icon';
+import { BuildBanner } from '@/components/ui/build-banner';
+import { NotificationRouter } from '@/components/ui/notification-router';
 import { DialogHost } from '@/components/ui/dialog';
 import { ToastHost } from '@/components/ui/toast';
 import { Colors } from '@/constants/theme';
@@ -20,9 +22,19 @@ import { BookingsProvider } from '@/store/bookings';
 import { HubsProvider } from '@/store/hubs';
 import { ExperienceRouter } from '@/components/ui/experience-router';
 import { NotificationsProvider } from '@/store/notifications';
+import { configureNotificationHandler } from '@/store/push';
 import { SessionProvider } from '@/store/session';
 
 SplashScreen.preventAutoHideAsync();
+
+/*
+ * How a notification behaves while the app is open.
+ *
+ * Set at module scope, before any screen mounts — `expo-notifications` wants the
+ * handler registered before a notification can arrive, and a notification that
+ * lands during startup is exactly the one a driver most needs to see.
+ */
+configureNotificationHandler();
 
 /** The app is pinned to light — see hooks/use-theme.ts. */
 const navigationTheme = {
@@ -68,27 +80,45 @@ export default function RootLayout() {
         <NotificationsProvider>
           <BookingsProvider>
             <HubsProvider>
-              <Stack
-                screenOptions={{
-                  headerShown: false,
-                  contentStyle: { backgroundColor: Colors.light.background },
-                }}>
-                <Stack.Screen name="(tabs)" />
-                <Stack.Screen
-                  name="rate-calculator"
-                  options={{ presentation: 'modal', animation: 'slide_from_bottom' }}
-                />
-                <Stack.Screen
-                  name="corporate"
-                  options={{ presentation: 'modal', animation: 'slide_from_bottom' }}
-                />
-              </Stack>
+              {/*
+                The banner is a sibling of the navigator, not a screen: a build
+                with no database is wrong on every route, including the modals,
+                and a warning you can navigate away from is not a warning.
+                It renders null on a configured build, so this costs nothing in
+                a real release.
+              */}
+              <View style={{ flex: 1 }}>
+                <BuildBanner />
+                <Stack
+                  screenOptions={{
+                    headerShown: false,
+                    contentStyle: { backgroundColor: Colors.light.background },
+                  }}>
+                  <Stack.Screen name="(tabs)" />
+                  <Stack.Screen
+                    name="rate-calculator"
+                    options={{ presentation: 'modal', animation: 'slide_from_bottom' }}
+                  />
+                  <Stack.Screen
+                    name="corporate"
+                    options={{ presentation: 'modal', animation: 'slide_from_bottom' }}
+                  />
+                </Stack>
+              </View>
 
               {/*
                 Inside the providers, outside the Stack: it needs the session
                 and the router, and it must survive every navigation it causes.
               */}
               <ExperienceRouter />
+
+              {/*
+                Opens the trip a driver tapped, rather than dropping them on
+                whatever screen the app happened to be on. A notification that
+                does not take you to the thing it is about is a notification
+                people stop tapping.
+              */}
+              <NotificationRouter />
 
               {/* Outside the Stack so these survive navigation. */}
               <DialogHost />

@@ -20,11 +20,13 @@ import {
   Radar,
   Scale,
   UsersRound,
+  Settings,
   ShieldCheck,
   Truck,
   LogOut,
   Smartphone,
   UserRound,
+  Wallet,
   X,
 } from 'lucide-react-native';
 import { useEffect, useMemo, useRef, useState } from 'react';
@@ -46,7 +48,8 @@ import { AppStoreModal, detectStorePlatform, openStore } from '@/components/ui/a
 import { useTheme } from '@/hooks/use-theme';
 import { showDialog } from '@/components/ui/dialog';
 import { showToast } from '@/components/ui/toast';
-import { SESSION_ROLES, useSession } from '@/store/session';
+import { SettingsMenu } from '@/components/ui/settings-menu';
+import { useSession } from '@/store/session';
 import { useExperience } from '@/hooks/use-experience';
 import { routeAllowed } from '@/lib/experience';
 
@@ -121,6 +124,7 @@ type NavHref =
   | '/driver-guidelines'
   | '/driver-signup'
   | '/driver-updates'
+  | '/driver-wallet'
   | '/legal'
   | '/locations'
   | '/my-packages'
@@ -162,7 +166,20 @@ function isActive(pathname: string, link: Pick<NavLink, 'href' | 'also'>): boole
 type NavChild = {
   key: string;
   label: string;
-  description: string;
+  /*
+    No `description`.
+
+    Every child used to carry one and the submenu rendered it under the label.
+    Removed rather than left unrendered: a field that is still populated but no
+    longer shown is an invitation to put it back, and the eleven strings it held
+    were the least useful text in the app — "Browse open deliveries by route"
+    under a link named Schedule My Journey.
+
+    The *parent* keeps its description, which the drawer still renders under
+    each group heading. That one earns its place: "Find work, apply to drive,
+    track your application" is the only thing telling you what four unrelated
+    screens have in common.
+  */
   icon: (color: string, size: number) => React.ReactNode;
   href: NavHref;
   /**
@@ -221,33 +238,43 @@ const NAV_LINKS: NavLink[] = [
     href: '/available-packages',
     icon: (color, size) => <Truck color={color} size={size} />,
     description: 'Find work, apply to drive, track your application',
-    also: ['/driver', '/driver-signup', '/driver-updates', '/driver-guidelines'],
+    also: ['/driver', '/driver-signup', '/driver-updates', '/driver-guidelines', '/driver-wallet'],
     children: [
       {
         key: 'find',
-        label: 'Find Open Jobs',
-        description: 'Browse open deliveries by route',
+        label: 'Schedule My Journey',
         href: '/available-packages',
         icon: (color, size) => <PackageSearch color={color} size={size} />,
       },
       {
         key: 'portal',
-        label: 'Driver Portal / Dashboard',
-        description: 'Your details, earnings and accepted deliveries',
+        label: 'Assigned Trip / Dashboard',
         href: '/driver',
         icon: (color, size) => <LayoutDashboard color={color} size={size} />,
       },
       {
+        /*
+          Between the dashboard and the application on purpose.
+
+          The order down this menu is the driver's own arc: find work, do the
+          work, get paid, apply. Money sits next to the dashboard it is earned
+          on rather than next to the application form, which is the one entry
+          here an approved driver never opens again.
+        */
+        key: 'wallet',
+        label: 'Driver Wallet / Payouts',
+        href: '/driver-wallet',
+        icon: (color, size) => <Wallet color={color} size={size} />,
+      },
+      {
         key: 'updates',
         label: 'Be a Driver / Updates',
-        description: 'Apply to drive, or track an application you sent',
         href: '/driver-updates',
         icon: (color, size) => <BellRing color={color} size={size} />,
       },
       {
         key: 'guidelines',
         label: 'Driver Guidelines & FAQs',
-        description: 'What we expect, and the questions people ask',
         href: '/driver-guidelines',
         icon: (color, size) => <BookOpen color={color} size={size} />,
       },
@@ -275,15 +302,13 @@ const NAV_LINKS: NavLink[] = [
     children: [
       {
         key: 'new',
-        label: 'Send a New Parcel',
-        description: 'The booking form, start to finish',
+        label: 'New Shipment',
         href: '/book',
         icon: (color, size) => <PackagePlus color={color} size={size} />,
       },
       {
         key: 'active',
         label: 'Active / In-Transit Parcels',
-        description: "Anything that hasn't arrived yet",
         href: '/my-packages',
         section: 'active',
         icon: (color, size) => <Truck color={color} size={size} />,
@@ -291,7 +316,6 @@ const NAV_LINKS: NavLink[] = [
       {
         key: 'history',
         label: 'Shipment History / Archives',
-        description: 'Everything delivered, oldest to newest',
         href: '/my-packages',
         section: 'history',
         icon: (color, size) => <Archive color={color} size={size} />,
@@ -299,7 +323,6 @@ const NAV_LINKS: NavLink[] = [
       {
         key: 'tracking',
         label: 'Tracking / Proof of Delivery',
-        description: 'Look up a parcel by its tracking ID',
         href: '/tracking',
         icon: (color, size) => <Radar color={color} size={size} />,
       },
@@ -315,7 +338,6 @@ const NAV_LINKS: NavLink[] = [
       {
         key: 'locations',
         label: HUB_SECTION_LABELS.locations,
-        description: 'Every counter, by city',
         href: '/locations',
         section: 'locations',
         icon: (color, size) => <MapPinned color={color} size={size} />,
@@ -323,7 +345,6 @@ const NAV_LINKS: NavLink[] = [
       {
         key: 'map',
         label: HUB_SECTION_LABELS.map,
-        description: 'See the network on a map',
         href: '/locations',
         section: 'map',
         icon: (color, size) => <Map color={color} size={size} />,
@@ -331,7 +352,6 @@ const NAV_LINKS: NavLink[] = [
       {
         key: 'hours',
         label: HUB_SECTION_LABELS.hours,
-        description: "When each hub is open, and what's open now",
         href: '/locations',
         section: 'hours',
         icon: (color, size) => <Clock color={color} size={size} />,
@@ -358,7 +378,6 @@ const NAV_LINKS: NavLink[] = [
       {
         key: 'overview',
         label: 'Dashboard Overview',
-        description: 'Queue health, volumes and errors at a glance',
         href: '/admin',
         section: 'overview',
         icon: (color, size) => <ChartColumn color={color} size={size} />,
@@ -366,7 +385,6 @@ const NAV_LINKS: NavLink[] = [
       {
         key: 'review',
         label: 'Driver & App Review',
-        description: 'Approve or reject driver applications',
         href: '/admin',
         section: 'review',
         icon: (color, size) => <ClipboardCheck color={color} size={size} />,
@@ -374,21 +392,18 @@ const NAV_LINKS: NavLink[] = [
       {
         key: 'users',
         label: 'User & Role Mgmt.',
-        description: 'Accounts, and who holds admin',
         href: '/admin-users',
         icon: (color, size) => <UsersRound color={color} size={size} />,
       },
       {
         key: 'ops',
         label: 'Hubs & Operations',
-        description: 'The network, and what is moving through it',
         href: '/admin-ops',
         icon: (color, size) => <MapPinned color={color} size={size} />,
       },
       {
         key: 'logs',
         label: 'System Logs & Errors',
-        description: 'What the app recorded going wrong',
         href: '/admin-logs',
         icon: (color, size) => <FileWarning color={color} size={size} />,
       },
@@ -405,21 +420,18 @@ const NAV_LINKS: NavLink[] = [
       {
         key: 'about',
         label: 'About LOCI',
-        description: 'Who we are and how the network works',
         href: '/about',
         icon: (color, size) => <Info color={color} size={size} />,
       },
       {
         key: 'support',
         label: 'Support / Contact Us',
-        description: 'Get help, or reach a person',
         href: '/support',
         icon: (color, size) => <LifeBuoy color={color} size={size} />,
       },
       {
         key: 'legal',
         label: 'Terms of Service & Privacy Policy',
-        description: 'What we collect, who sees it, and the rules',
         href: '/legal',
         icon: (color, size) => <Scale color={color} size={size} />,
       },
@@ -438,7 +450,8 @@ export function AppNavBar() {
   const [storeModalOpen, setStoreModalOpen] = useState(false);
   /** Key of the link whose submenu is showing, or null. Only ever one at a time. */
   const [openSubmenu, setOpenSubmenu] = useState<string | null>(null);
-  const { role, setRole, user, isAuthenticated, isAdmin, isApprovedDriver, signOut } = useSession();
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const { user, isAuthenticated, isAdmin, signOut } = useSession();
   const experience = useExperience();
   // Labels need room; below that the links drop to icons, and below *that* they
   // leave the capsule entirely — the drawer already lists every one of them, so
@@ -538,20 +551,15 @@ export function AppNavBar() {
    * account am I in?" is the question people actually have — then offers the
    * two things they came for.
    */
-  const openAccountMenu = () => {
-    showDialog(
-      user?.name ? `Signed in as ${user.name}` : 'Your account',
-      user?.email ?? undefined,
-      [
-        { text: 'Close', style: 'cancel' },
-        {
-          text: role === 'driver' ? 'My Jobs' : 'My Packages',
-          onPress: () => router.push(role === 'driver' ? '/driver' : '/my-packages'),
-        },
-        { text: 'Sign out', style: 'destructive', onPress: handleSignOut },
-      ],
-    );
-  };
+  /*
+   * The avatar opens the same sheet as the gear.
+   *
+   * It used to raise its own dialog offering "My Jobs" and "Sign out" — which
+   * is now three quarters of the settings sheet, and a second copy that would
+   * drift. Two entry points to one panel is fine; two panels claiming to be the
+   * account is not.
+   */
+  const openAccountMenu = () => setSettingsOpen(true);
 
   const go = (href: NavHref) => {
     setMenuOpen(false);
@@ -629,55 +637,21 @@ export function AppNavBar() {
 
           <View style={[styles.actions, tight && styles.actionsTight]}>
             {/*
-              Shown only to someone who is actually both.
+              Settings.
 
-              For everyone else the toggle offered a driver view they had no
-              application for — a switch whose only effect was a screen full of
-              empty states. On web it is hidden too: the dashboard shows
-              everything the account can do without choosing a side.
+              The Sender/Driver segmented control used to live here. It moved
+              into this sheet: switching interface belongs to the account rather
+              than to the page, and two controls doing the same thing is how
+              they end up disagreeing.
             */}
-            <View
-              style={[
-                styles.segmented,
-                { backgroundColor: theme.surfaceMuted },
-                !(isApprovedDriver && experience !== 'web') && styles.hidden,
-              ]}>
-              {SESSION_ROLES.map((option) => {
-                const active = role === option.value;
-
-                return (
-                  <Pressable
-                    key={option.value}
-                    onPress={() => setRole(option.value)}
-                    accessibilityRole="radio"
-                    accessibilityState={{ selected: active }}
-                    accessibilityLabel={`View as ${option.label}`}
-                    style={({ pressed }) => [
-                      styles.segment,
-                      tight && styles.segmentTight,
-                      active && { backgroundColor: theme.primary },
-                      pressed && styles.pressed,
-                    ]}>
-                    {({ hovered }: { hovered?: boolean }) => (
-                      <Text
-                        style={[
-                          styles.segmentText,
-                          {
-                            color: active
-                              ? theme.primaryText
-                              : // `hovered` is web-only; on native it never sets.
-                                hovered && Platform.OS === 'web'
-                                ? theme.text
-                                : theme.textSecondary,
-                          },
-                        ]}>
-                        {option.label}
-                      </Text>
-                    )}
-                  </Pressable>
-                );
-              })}
-            </View>
+            <Pressable
+              onPress={() => setSettingsOpen(true)}
+              accessibilityRole="button"
+              accessibilityLabel="Settings"
+              hitSlop={6}
+              style={({ pressed }) => [styles.actionIcon, pressed && styles.pressed]}>
+              <Settings color={theme.text} size={20} />
+            </Pressable>
 
             {/*
               The account control. It used to push /sign-in unconditionally,
@@ -735,6 +709,8 @@ export function AppNavBar() {
         links={navLinks}
       />
 
+      <SettingsMenu open={settingsOpen} onClose={() => setSettingsOpen(false)} />
+
       <AppStoreModal
         visible={storeModalOpen}
         onClose={() => setStoreModalOpen(false)}
@@ -749,8 +725,8 @@ export function AppNavBar() {
  *
  * A parent **only opens its menu** — it does not navigate. It used to do both,
  * pointing at its own `href`, and every one of those four hrefs was the same
- * destination as the entry's *first child*: Jobs & Drivers → Find Open Jobs,
- * Shipments → Send a New Parcel, Hubs → Drop-off / Pickup Locations, About Us →
+ * destination as the entry's *first child*: Jobs & Drivers → Schedule My Journey,
+ * Shipments → New Shipment, Hubs → Drop-off / Pickup Locations, About Us →
  * About LOCI. So clicking a heading looked exactly like the app choosing item
  * one for you, which is what it was doing.
  *
@@ -918,6 +894,20 @@ function NavLinkItem({
             },
             Elevation.raised,
           ]}>
+          {/*
+            One line each: icon, label, nothing else.
+
+            These rows carried a description under every label, which made a
+            four-item menu eleven lines tall and turned a navigation control into
+            something you read rather than scan. The descriptions were also the
+            least useful text in the app — "Browse open deliveries by route" under
+            a link called Schedule My Journey tells a driver nothing they had not
+            already worked out from the label.
+
+            A bare icon rather than the tinted chip, matching the drawer rows
+            below. The chip was there to anchor two lines of text; against a
+            single line it is a coloured square doing nothing.
+          */}
           {link.children.map((child) => (
             <Pressable
               key={child.key}
@@ -928,15 +918,10 @@ function NavLinkItem({
                 styles.submenuItem,
                 (pressed || hovered) && { backgroundColor: theme.surfaceMuted },
               ]}>
-              <View style={[styles.submenuIcon, { backgroundColor: theme.primarySoft }]}>
-                {child.icon(theme.primaryOnSoft, 16)}
-              </View>
-              <View style={styles.submenuText}>
-                <Text style={[styles.submenuLabel, { color: theme.text }]}>{child.label}</Text>
-                <Text style={[styles.submenuDescription, { color: theme.textMuted }]}>
-                  {child.description}
-                </Text>
-              </View>
+              {child.icon(theme.textSecondary, 17)}
+              <Text style={[styles.submenuLabel, { color: theme.text }]} numberOfLines={1}>
+                {child.label}
+              </Text>
             </Pressable>
           ))}
         </View>
@@ -1327,11 +1312,19 @@ const styles = StyleSheet.create({
     top: '100%',
     marginTop: Spacing.two,
     /*
-     * 296px, measured: "Terms of Service & Privacy Policy" renders 219.5px at
-     * 14px semi-bold, and the row spends 20px on padding, 30px on the icon and
-     * 8px on the gap. At the old 268px that label wrapped to two lines.
+     * 280px, re-measured after the descriptions came out.
+     *
+     * "Terms of Service & Privacy Policy" still renders 219.5px at 14px
+     * semi-bold — it is the longest label and it is what sets the floor. The
+     * row now spends 28px on padding, 18px on a bare icon and 12px on the gap:
+     * 277.5px. Anything narrower wraps that label, which is the two-line row
+     * this change exists to remove.
+     *
+     * It was 296px when each row carried a 30px icon chip. Leaving it there
+     * would have been harmless and wrong — a menu 16px wider than its content
+     * for a reason that no longer exists.
      */
-    minWidth: 296,
+    minWidth: 280,
     borderRadius: Radius.lg,
     borderWidth: StyleSheet.hairlineWidth,
     paddingVertical: Spacing.one,
@@ -1345,29 +1338,25 @@ const styles = StyleSheet.create({
   submenuItem: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: Spacing.two,
-    paddingVertical: Spacing.two - 2,
+    gap: Spacing.three - 4,
+    paddingVertical: Spacing.two + 2,
     paddingHorizontal: Spacing.three - 2,
+    /*
+     * 44px, explicitly, rather than hoping the padding adds up to it.
+     *
+     * A single line of 14px type plus 10px of padding each side is 41px, which
+     * is under the minimum touch target — and the row used to clear it only
+     * because it was two lines tall. Padding alone is the wrong lever here:
+     * enough of it to reach 44 would make the menu feel loose, which is the
+     * opposite of what this change is for.
+     */
+    minHeight: 44,
     ...Platform.select({ web: { cursor: 'pointer' }, default: {} }),
   },
-  submenuIcon: {
-    width: 30,
-    height: 30,
-    borderRadius: Radius.sm,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  submenuText: {
-    flex: 1,
-    gap: 1,
-  },
   submenuLabel: {
+    flex: 1,
     fontSize: FontSize.small,
-    ...font(700),
-  },
-  submenuDescription: {
-    fontSize: FontSize.micro,
-    ...font(500),
+    ...font(600),
   },
   linkIconOnly: {
     width: 34,

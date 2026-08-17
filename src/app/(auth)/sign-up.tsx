@@ -3,6 +3,7 @@ import { UserRound } from 'lucide-react-native';
 import { useState } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 
+import { errorMessage } from '@/lib/errors';
 import { AuthFooterLink, AuthShell } from '@/components/ui/auth-shell';
 import { Button } from '@/components/ui/button';
 import { showDialog } from '@/components/ui/dialog';
@@ -60,7 +61,7 @@ export default function SignUpScreen() {
     } catch (thrown) {
       // The store already traps its own errors; this is the last line of
       // defence so the button can never be left disabled with no explanation.
-      result = { error: thrown instanceof Error ? thrown.message : 'Something went wrong.' };
+      result = { error: errorMessage(thrown, 'Something went wrong.') };
     } finally {
       setPending(false);
     }

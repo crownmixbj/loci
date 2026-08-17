@@ -72,11 +72,11 @@ export const PROCESS_STEPS: ProcessStep[] = [
     benefits: [
       {
         title: 'Matched by route',
-        body: 'Drivers browse open jobs by origin city, so your parcel is seen by people already making that trip.',
+        body: 'Drivers declare the journeys they are making, and your parcel is offered to someone already going that way.',
       },
       {
-        title: 'Claimed, not auto-assigned',
-        body: 'A driver chooses your job, which means someone has actually committed to carrying it.',
+        title: 'Offered, not forced',
+        body: 'A driver has to accept before your parcel is theirs — so someone has actually committed to carrying it, rather than been handed it.',
       },
       {
         title: 'Code-confirmed handover',

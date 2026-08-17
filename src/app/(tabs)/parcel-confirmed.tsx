@@ -31,12 +31,21 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { EmptyState, screenPadding, SectionLabel } from '@/components/ui/screen';
-import {FontSize, MaxContentWidth, PageCanvas, Radius, Spacing, Typography, font } from '@/constants/theme';
+import {
+  FontSize,
+  MaxContentWidth,
+  PageCanvas,
+  Radius,
+  Spacing,
+  Typography,
+  font,
+} from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';
 import {
   BOOKING_STAGES,
   estimateFee,
   formatNaira,
+  handoverFeeLabel,
   dropoffSummaryLine,
   pickupSummaryLine,
   pickupWindow,
@@ -263,10 +272,10 @@ export default function ParcelConfirmedScreen() {
           {fee.insurance > 0 && (
             <CostRow label="Insurance · 1% of declared value" value={fee.insurance} />
           )}
-          {fee.doorstep > 0 && (
+          {fee.handover > 0 && (
             <CostRow
-              label={`Doorstep · ${fee.doorstepLegs === 2 ? 'pickup and delivery' : 'one leg'}`}
-              value={fee.doorstep}
+              label={handoverFeeLabel(booking.pickupMode, booking.dropoffMode)}
+              value={fee.handover}
             />
           )}
 

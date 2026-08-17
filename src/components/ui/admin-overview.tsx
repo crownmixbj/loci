@@ -1,14 +1,16 @@
 import { useRouter } from 'expo-router';
 import { ArrowRight, TriangleAlert } from 'lucide-react-native';
 import { useCallback, useEffect, useState } from 'react';
-import { ActivityIndicator, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
 
+import { errorMessage } from '@/lib/errors';
 import { AdminError, Metric, adminStyles } from '@/components/ui/admin-shell';
 import { Button } from '@/components/ui/button';
 import { SectionLabel } from '@/components/ui/screen';
 import { Radius, Spacing, Typography, font } from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';
-import { fetchOverview, type AdminOverview as Overview } from '@/store/admin';
+import { AdminParcelDrawer } from '@/components/ui/admin-parcel-drawer';
+import { fetchOverview, type AdminOverview as Overview, type ParcelScope } from '@/store/admin';
 import { REVIEW_WORKING_DAYS } from '@/store/driver-applications';
 
 /**
@@ -29,6 +31,13 @@ export function AdminOverview({ onReview }: { onReview: () => void }) {
   const router = useRouter();
 
   const [data, setData] = useState<Overview | null>(null);
+
+  /** Null when the parcel drawer is closed. */
+  const [drawer, setDrawer] = useState<{
+    scope: ParcelScope;
+    city?: string;
+    title: string;
+  } | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -42,7 +51,7 @@ export function AdminOverview({ onReview }: { onReview: () => void }) {
        * and "function admin_overview does not exist" is not a message anyone
        * should have to decode.
        */
-      const message = thrown instanceof Error ? thrown.message : 'Could not load the overview.';
+      const message = errorMessage(thrown, 'Could not load the overview.');
       setError(
         /does not exist|schema cache|404/i.test(message)
           ? 'The admin functions are missing. Run supabase/07_admin.sql in the SQL editor, then reload.'
@@ -117,15 +126,48 @@ export function AdminOverview({ onReview }: { onReview: () => void }) {
 
       <SectionLabel>Parcels</SectionLabel>
       <View style={adminStyles.metrics}>
-        <Metric label="Booked in 7 days" value={data.parcelsLast7Days} tone="primary" />
-        <Metric
+        {/*
+          Every parcel card opens the drawer.
+
+          A number an operator cannot act on is a number they learn to ignore;
+          the whole point of "14 unclaimed" is the question "which fourteen".
+          The cards that are not about parcels — accounts, admins, errors — stay
+          static, because there is no parcel list behind them.
+        */}
+        <ParcelMetric
+          label="Booked in 7 days"
+          value={data.parcelsLast7Days}
+          tone="primary"
+          onPress={() => setDrawer({ scope: 'all', title: 'All parcels' })}
+        />
+        {/*
+          Unclaimed opens the drawer on a plain click, like every other parcel
+          card.
+
+          It used to toggle an inline destination list on click and open the
+          drawer on a *long press*. On a desktop admin dashboard that is close
+          to no affordance at all — there is no long press with a mouse beyond
+          holding the button down and hoping — so the card read as the one that
+          did not work. The destinations moved inside the drawer, where they are
+          filter chips over the same list.
+        */}
+        <ParcelMetric
           label="Unclaimed"
           value={data.parcelsUnclaimed}
           tone={data.parcelsUnclaimed > 0 ? 'warning' : 'neutral'}
-          hint="No driver yet"
+          onPress={() => setDrawer({ scope: 'unassigned', title: 'Unclaimed parcels' })}
         />
-        <Metric label="In transit" value={data.parcelsInTransit} />
-        <Metric label="Delivered" value={data.parcelsDelivered} tone="success" />
+        <ParcelMetric
+          label="In transit"
+          value={data.parcelsInTransit}
+          onPress={() => setDrawer({ scope: 'assigned', title: 'Parcels with a driver' })}
+        />
+        <ParcelMetric
+          label="Delivered"
+          value={data.parcelsDelivered}
+          tone="success"
+          onPress={() => setDrawer({ scope: 'all', title: 'All parcels' })}
+        />
       </View>
 
       <SectionLabel>Platform</SectionLabel>
@@ -173,11 +215,86 @@ export function AdminOverview({ onReview }: { onReview: () => void }) {
         size="md"
         onPress={() => router.navigate('/admin-logs')}
       />
+
+      <AdminParcelDrawer
+        scope={drawer?.scope ?? null}
+        city={drawer?.city}
+        title={drawer?.title ?? ''}
+        onClose={() => setDrawer(null)}
+      />
     </View>
   );
 }
 
+/**
+ * A stat card that opens the parcel drawer.
+ *
+ * Wraps `Metric` rather than replacing it, so a tappable card and a static one
+ * are pixel-identical apart from the hint — the row would otherwise stop lining
+ * up the moment one card became interactive.
+ */
+function ParcelMetric({
+  label,
+  value,
+  tone,
+  onPress,
+}: {
+  label: string;
+  value: number;
+  tone?: 'primary' | 'success' | 'warning' | 'neutral';
+  onPress: () => void;
+}) {
+  return (
+    <Pressable
+      onPress={onPress}
+      accessibilityRole="button"
+      accessibilityLabel={`${label}: ${value}. Open the parcel list.`}
+      style={({ pressed }) => [adminStyles.metricSlot, pressed && { opacity: 0.6 }]}>
+      <Metric label={label} value={value} tone={tone} hint="Tap to open" nested />
+    </Pressable>
+  );
+}
+
 const styles = StyleSheet.create({
+  breakdown: {
+    borderWidth: StyleSheet.hairlineWidth,
+    borderRadius: Radius.md,
+    marginBottom: Spacing.four,
+    overflow: 'hidden',
+  },
+  breakdownLoading: {
+    paddingVertical: Spacing.four,
+    marginBottom: Spacing.four,
+    alignItems: 'center',
+  },
+  breakdownRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: Spacing.three,
+    paddingHorizontal: Spacing.three,
+    paddingVertical: Spacing.two + 2,
+  },
+  breakdownCity: {
+    ...Typography.meta,
+    ...font(600),
+    flex: 1,
+  },
+  breakdownFacts: {
+    alignItems: 'flex-end',
+    gap: 1,
+  },
+  breakdownCount: {
+    ...Typography.meta,
+    ...font(700),
+  },
+  breakdownMeta: {
+    ...Typography.caption,
+  },
+  breakdownEmpty: {
+    ...Typography.caption,
+    padding: Spacing.three,
+  },
   block: {
     marginTop: Spacing.three,
   },

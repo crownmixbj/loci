@@ -25,7 +25,7 @@ import {
   servicePrefillParams,
   type ServiceId,
 } from '@/constants/services';
-import {FontSize, Radius, Spacing, Typography, font } from '@/constants/theme';
+import { FontSize, Radius, Spacing, Typography, font } from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';
 import { CITIES, formatNaira, PRICING } from '@/store/bookings';
 
@@ -52,7 +52,7 @@ const VALUES = [
   {
     key: 'riders',
     title: 'Riders who earn well',
-    body: 'Drivers pick the jobs they want and see the fee before accepting. No forced dispatch.',
+    body: 'Drivers say where they are going and LOCI offers them parcels on that route. Every offer can be declined — nothing is assigned without a driver agreeing.',
     icon: (color: string, size: number) => <Users color={color} size={size} />,
   },
   {

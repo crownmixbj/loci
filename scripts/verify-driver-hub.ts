@@ -41,8 +41,8 @@ const ROOT = process.cwd();
 const navSource = readFileSync(join(ROOT, 'src/components/ui/app-nav-bar.tsx'), 'utf8');
 
 const DROPDOWN_ROUTES: Record<string, string> = {
-  'Find Open Jobs': 'available-packages',
-  'Driver Portal / Dashboard': 'driver',
+  'Schedule My Journey': 'available-packages',
+  'Assigned Trip / Dashboard': 'driver',
   'Be a Driver / Updates': 'driver-updates',
   'Driver Guidelines & FAQs': 'driver-guidelines',
 };
@@ -65,6 +65,46 @@ check(
     !navSource.includes("label: 'Drivers'") &&
     !navSource.includes("label: 'Find Jobs'"),
   'a leftover Drivers or Find Jobs entry would put the same page in the nav twice',
+);
+
+/*
+ * ---------- the dropdown is a list, not a rich menu ----------
+ *
+ * Every child used to carry a description rendered under its label, which made
+ * the Jobs & Drivers menu eleven lines tall for five destinations.
+ *
+ * Asserted on the *type* rather than on the render, because that is what stops
+ * it coming back: with no `description` on `NavChild`, re-adding the strings
+ * fails typecheck rather than quietly reappearing under every label. The render
+ * is asserted too, since the field could be dropped while the component still
+ * reached for something else.
+ */
+/*
+ * Comments stripped first. The NavChild type now carries a note *about* the
+ * removed field, so matching the raw source found the word "description" in the
+ * explanation of why there is no description — the assertion failed on its own
+ * documentation.
+ */
+const navCode = navSource.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+
+check(
+  'nav children carry no description to render',
+  !/type NavChild = \{[\s\S]*?\n\};/.exec(navCode)?.[0].includes('description'),
+  'a populated but unrendered field is an invitation to put the rows back',
+);
+check(
+  'and the submenu row draws only the icon and the label',
+  !navSource.includes('child.description') && !navSource.includes('submenuDescription'),
+);
+check(
+  'the parent groups keep theirs, which the drawer still shows',
+  /type NavLink = \{[\s\S]*?\n\};/.exec(navCode)?.[0].includes('description: string') ?? false,
+  '"Find work, apply to drive, track your application" is the only thing tying four unrelated screens together',
+);
+check(
+  'a submenu row clears the minimum touch target on its own',
+  /minHeight: 44/.test(navSource),
+  'one line of 14px type plus padding is 41px; the old row cleared 44 only by being two lines tall',
 );
 
 check(
@@ -95,6 +135,7 @@ const base: DriverApplication = {
   state: 'Oyo',
   baseCity: 'Ibadan',
   vehicleType: 'Car',
+  vehicleColour: null,
   plateNumber: 'ABC-123',
   licenseId: 'LIC1',
   guarantorName: 'G',

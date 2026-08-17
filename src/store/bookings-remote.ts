@@ -48,6 +48,13 @@ export type BookingRow = {
   driver: string | null;
   driver_id: string | null;
   accepted_at: string | null;
+  picked_up_at: string | null;
+  delivered_at: string | null;
+  received_by: string | null;
+  proof_path: string | null;
+  proof_note: string | null;
+  cancelled_at: string | null;
+  cancellation_reason: string | null;
   created_at: string;
 };
 
@@ -89,13 +96,35 @@ export function rowToBooking(row: BookingRow): Booking {
     driver: row.driver,
     driverId: row.driver_id,
     acceptedAt: row.accepted_at,
+    pickedUpAt: (row.picked_up_at as string | null) ?? null,
+    deliveredAt: (row.delivered_at as string | null) ?? null,
+    receivedBy: (row.received_by as string | null) ?? null,
+    proofPath: (row.proof_path as string | null) ?? null,
+    proofNote: (row.proof_note as string | null) ?? null,
+    cancelledAt: (row.cancelled_at as string | null) ?? null,
+    cancellationReason: (row.cancellation_reason as string | null) ?? null,
     createdAt: row.created_at,
   };
 }
 
 /** The insert payload. Server-owned columns are deliberately absent. */
 export function bookingToInsert(
-  booking: Omit<Booking, 'id' | 'createdAt' | 'driver' | 'driverId' | 'acceptedAt'>,
+  booking: Omit<
+    Booking,
+    | 'id'
+    | 'createdAt'
+    | 'driver'
+    | 'driverId'
+    | 'acceptedAt'
+    // Written by `advance_booking`, never by an insert.
+    | 'pickedUpAt'
+    | 'deliveredAt'
+    | 'receivedBy'
+    | 'proofPath'
+    | 'proofNote'
+    | 'cancelledAt'
+    | 'cancellationReason'
+  >,
 ) {
   return {
     tracking_id: booking.trackingId,
@@ -147,7 +176,22 @@ export async function fetchBookings(): Promise<Booking[]> {
 }
 
 export async function insertBooking(
-  booking: Omit<Booking, 'id' | 'createdAt' | 'driver' | 'driverId' | 'acceptedAt'>,
+  booking: Omit<
+    Booking,
+    | 'id'
+    | 'createdAt'
+    | 'driver'
+    | 'driverId'
+    | 'acceptedAt'
+    // Written by `advance_booking`, never by an insert.
+    | 'pickedUpAt'
+    | 'deliveredAt'
+    | 'receivedBy'
+    | 'proofPath'
+    | 'proofNote'
+    | 'cancelledAt'
+    | 'cancellationReason'
+  >,
 ): Promise<Booking> {
   const { data, error } = await supabase
     .from('bookings')

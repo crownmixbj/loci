@@ -2,6 +2,7 @@ import { Ban, History, ShieldCheck, ShieldOff, Trash2, UserRound } from 'lucide-
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { ActivityIndicator, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 
+import { errorMessage } from '@/lib/errors';
 import { AdminError, AdminShell } from '@/components/ui/admin-shell';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -99,7 +100,7 @@ export default function AdminUsersScreen() {
       setGrants(nextGrants);
       setError(null);
     } catch (thrown) {
-      setError(thrown instanceof Error ? thrown.message : 'Could not load users.');
+      setError(errorMessage(thrown, 'Could not load users.'));
     } finally {
       setLoading(false);
     }
@@ -202,10 +203,7 @@ export default function AdminUsersScreen() {
        * and paraphrasing them into "Something went wrong" would hide the one
        * piece of information that explains the refusal.
        */
-      showDialog(
-        'Role not changed',
-        thrown instanceof Error ? thrown.message : 'The database refused the change.',
-      );
+      showDialog('Role not changed', errorMessage(thrown, 'The database refused the change.'));
     } finally {
       setBusyId(null);
     }
@@ -552,11 +550,12 @@ export default function AdminUsersScreen() {
           body="This cannot be undone. Everything identifying this person is overwritten, and their deliveries stay in place for the people on the other end of them."
           consequences={[
             'Name, phone, NIN, address, bank details, guarantor and next of kin are overwritten.',
-            'Their uploaded licence, ID and insurance documents are deleted outright.',
+            'Their NIN record, stored selfies, licence and ID scans are deleted outright.',
+            'Bank details are removed from payout requests and change requests; the earnings ledger keeps its amounts.',
             'Parcels they carried keep their route and fare, with the carrier shown as "Former driver".',
             'Parcels they sent keep their route and fare; the addresses and phone numbers on them are removed.',
             'They are blocked from driving and from posting parcels.',
-            'Their login still exists — removing it needs an Edge Function. See supabase/09_bans.sql.',
+            'Their login is removed too, if the erase-auth-user function is deployed. You will be told either way.',
           ]}
           confirmLabel="Erase permanently"
           confirmWord="ERASE"
@@ -564,9 +563,28 @@ export default function AdminUsersScreen() {
           reasonLabel="Why are you erasing this account?"
           destructive
           onConfirm={async (reason) => {
-            await erasePerson(moderating.target.id, reason);
+            const outcome = await erasePerson(moderating.target.id, reason);
             await load();
-            showToast('Account erased', { message: 'The person is gone; the deliveries remain.' });
+
+            /*
+              Two outcomes, said apart.
+
+              The scrub either succeeded or threw — there is no partial version
+              of it. The *login* is a separate step that a project without the
+              Edge Function deployed will not complete, and reporting a plain
+              "Account erased" in that case would tell an operator the login is
+              gone when it is not. For an erasure request that is the one
+              detail somebody may have to answer for.
+            */
+            showToast(
+              outcome.loginRemoved ? 'Account erased' : 'Data erased, login remains',
+              outcome.loginRemoved
+                ? { message: 'The person is gone; the deliveries remain.' }
+                : {
+                    message: `Everything identifying them is gone and they are blocked. Their login could not be removed: ${outcome.loginError ?? 'reason unknown'}`,
+                    tone: 'info',
+                  },
+            );
           }}
           onClose={() => setModerating(null)}
         />

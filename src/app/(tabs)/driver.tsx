@@ -26,7 +26,7 @@ import { Badge, RoutePill } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { EmptyState, screenPadding, ScreenHeader, SectionLabel } from '@/components/ui/screen';
-import {FontSize, Radius, Spacing, Typography, font } from '@/constants/theme';
+import { FontSize, MaxContentWidth, Radius, Spacing, Typography, font } from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';
 import {
   formatNaira,
@@ -40,6 +40,7 @@ import {
   useBookings,
   type Booking,
 } from '@/store/bookings';
+import { DriverHub } from '@/components/ui/driver-hub';
 import { SignedOutState } from '@/components/ui/signed-out-state';
 import {
   REVIEW_WORKING_DAYS,
@@ -47,6 +48,7 @@ import {
   type DriverApplication,
 } from '@/store/driver-applications';
 import { useSession } from '@/store/session';
+import { useExperience } from '@/hooks/use-experience';
 
 /**
  * The Driver Portal.
@@ -65,6 +67,7 @@ export default function DriverScreen() {
   const router = useRouter();
   const { bookings } = useBookings();
   const { viewerId, application, isApprovedDriver } = useSession();
+  const experience = useExperience();
 
   const myJobs = useMemo(
     () => (viewerId ? bookings.filter((booking) => isCarrier(booking, viewerId)) : []),
@@ -74,10 +77,18 @@ export default function DriverScreen() {
   const active = useMemo(() => myJobs.filter((b) => b.status !== 'Delivered'), [myJobs]);
   const completed = useMemo(() => myJobs.filter((b) => b.status === 'Delivered'), [myJobs]);
 
-  const earnings = useMemo(
-    () => myJobs.reduce((total, booking) => total + booking.estimatedFee, 0),
-    [myJobs],
-  );
+  /*
+   * Two screens behind one route.
+   *
+   * On a phone this is the Driver Hub: a map, the current job, and the three
+   * things you press while standing next to a gate. On the web dashboard it
+   * stays the portal below — details, application status, full history — which
+   * is what you want at a desk and unusable one-handed.
+   *
+   * Same href either way, so the tab bar, the nav bar and every existing link
+   * keep working without knowing which one they lead to.
+   */
+  if (experience === 'driver') return <DriverHub />;
 
   if (!viewerId) {
     return (
@@ -144,6 +155,25 @@ export default function DriverScreen() {
           </View>
         )}
 
+        {/*
+          ---------- Money is not on this page, and neither is a link to it ----
+
+          Three things about money used to live here: the payout account card
+          (the Wallet renders the same component), an "Expected payout" total
+          that was a *different number* from the wallet balance — gross, and
+          counting parcels still moving — and then a button to the Wallet.
+
+          All three are gone. The split is by subject: this screen is who LOCI
+          has you down as and what you are carrying; the Wallet is every
+          question about money, including which account it lands in.
+
+          ⚠ No signpost here on purpose, which is only safe because navigation
+            carries one on every surface: "Driver Wallet / Payouts" in the Jobs
+            & Drivers dropdown on web, and a Wallet tab in the bottom bar on a
+            driver's phone. `verify-wallet` asserts both, and those assertions
+            are load-bearing now rather than merely tidy — deleting either one
+            would leave the wallet with no route to it at all.
+        */}
         {application && (
           <Button
             label="Application status & updates"
@@ -158,19 +188,21 @@ export default function DriverScreen() {
         {/* ---------- What you're carrying ---------- */}
         <SectionLabel>Your deliveries</SectionLabel>
 
+        {/*
+          Counts, not money.
+
+          The third cell here was "Expected payout" — gross quoted fares across
+          every parcel, delivered or not. The Wallet's headline is net of
+          commission, delivered only, and less a security hold, so the two were
+          never going to match, and showing both a click apart invited a driver
+          to treat the larger one as their balance. One money figure, in the
+          place that owns money.
+        */}
         {myJobs.length > 0 && (
           <Card style={styles.summary}>
             <Stat label="Active" value={String(active.length)} />
             <View style={[styles.statDivider, { backgroundColor: theme.border }]} />
             <Stat label="Delivered" value={String(completed.length)} />
-            <View style={[styles.statDivider, { backgroundColor: theme.border }]} />
-            {/*
-              "Expected" rather than "Total earnings": these are the quoted
-              fares on jobs, not money that has been paid out. There is no
-              payout ledger in this app yet, and a number labelled as earnings
-              is a number someone will expect to see in their bank.
-            */}
-            <Stat label="Expected payout" value={formatNaira(earnings)} accent />
           </Card>
         )}
 
@@ -179,10 +211,10 @@ export default function DriverScreen() {
             <EmptyState
               icon={(color, size) => <ClipboardList color={color} size={size} />}
               title="No jobs yet"
-              message="You haven't accepted any deliveries. Browse open packages by route to pick up your first."
+              message="You haven't carried anything yet. Tell LOCI the journeys you are making and parcels going the same way are offered to you automatically."
             />
             <Button
-              label="Find available packages"
+              label="Schedule a journey"
               icon={(color, size) => <PackageSearch color={color} size={size} />}
               onPress={() => router.navigate('/available-packages')}
             />
@@ -212,7 +244,7 @@ export default function DriverScreen() {
             )}
 
             <Button
-              label="Find more packages"
+              label="Schedule another journey"
               variant="secondary"
               icon={(color, size) => <PackageSearch color={color} size={size} />}
               onPress={() => router.navigate('/available-packages')}
@@ -291,13 +323,17 @@ function DriverIdentity({ application }: { application: DriverApplication }) {
       </View>
 
       {/*
-        Named rather than implied. Someone who has moved city or changed their
-        plate needs to know this screen will not let them fix it themselves,
-        and who to tell instead.
+        This used to say "email support", and had done since before
+        `update_driver_profile` existed. It is now wrong: an approved driver can
+        change their plate, vehicle and address themselves on Be a Driver /
+        Updates, and identity fields there send the account back for review.
+        Copy that tells someone to email support for a job the app does is the
+        kind of stale sentence that makes people distrust the rest of the page.
       */}
       <Text style={[styles.identityFootnote, { color: theme.textMuted }]}>
-        These details were checked during review, so they can&apos;t be edited here. Email support
-        if anything has changed — especially your vehicle or licence.
+        Checked during review, so they are read-only here. Vehicle, plate and address can be changed
+        under Be a Driver / Updates; changing your name, NIN or licence there sends your account
+        back for review.
       </Text>
     </Card>
   );
@@ -420,8 +456,17 @@ function JobCard({ booking }: { booking: Booking }) {
       <View style={[styles.payoutRow, { backgroundColor: theme.surfaceMuted }]}>
         <View style={styles.metric}>
           <Banknote color={theme.textMuted} size={15} />
+          {/*
+            "Fare", not "Earned".
+
+            This is the gross amount the sender was quoted. The driver's actual
+            credit for this parcel is that figure less commission, and it lives
+            in `driver_earnings` — so a delivered card headed "Earned" with a
+            bigger number than the wallet row for the same trip is the same
+            contradiction as the old Expected total, one parcel at a time.
+          */}
           <Text style={[styles.payoutLabel, { color: theme.textSecondary }]}>
-            {isDelivered ? 'Earned' : 'Payout on delivery'}
+            {isDelivered ? 'Fare' : 'Fare on delivery'}
           </Text>
         </View>
         <Text style={[styles.payoutValue, { color: isDelivered ? theme.success : theme.primary }]}>
@@ -449,6 +494,11 @@ const styles = StyleSheet.create({
   },
   content: {
     width: '100%',
+    // Without a max width the `alignItems: 'center'` above has nothing to do:
+    // the content is already as wide as the viewport. Same omission that left
+    // Schedule My Journey stretching across a desktop.
+    maxWidth: MaxContentWidth,
+    alignSelf: 'center',
   },
   identity: {
     gap: Spacing.three - 2,

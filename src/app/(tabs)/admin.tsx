@@ -25,15 +25,17 @@ import {
   View,
 } from 'react-native';
 
+import { errorMessage } from '@/lib/errors';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
+import { DispatchControl } from '@/components/ui/dispatch-control';
 import { ChipGroup } from '@/components/ui/chip';
 import { showDialog } from '@/components/ui/dialog';
 import { EmptyState, screenPadding, ScreenHeader, SectionLabel } from '@/components/ui/screen';
 import { SignedOutState } from '@/components/ui/signed-out-state';
 import { showToast } from '@/components/ui/toast';
-import {FontSize, MaxContentWidth, Radius, Spacing, Typography, font } from '@/constants/theme';
+import { FontSize, MaxContentWidth, Radius, Spacing, Typography, font } from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';
 import {
   fetchAllApplications,
@@ -56,12 +58,28 @@ import { signedDocumentUrl } from '@/store/driver-documents';
  * — splitting them would mean two places computing "how many are waiting" and
  * eventually disagreeing.
  */
-const SECTIONS = ['overview', 'review'] as const;
+const SECTIONS = ['overview', 'dispatch', 'review'] as const;
 type Section = (typeof SECTIONS)[number];
 
 const SECTION_LABELS: Record<Section, string> = {
   overview: 'Overview',
+  dispatch: 'Dispatch',
   review: 'Driver review',
+};
+
+/*
+  Dispatch sits between the two on purpose.
+
+  Overview answers "is anything wrong"; Dispatch is where you act on the answer;
+  Driver review is a queue you work through on a different rhythm. Putting the
+  control after the review queue would mean the tab you reach for during an
+  incident is the one furthest from the tab that told you there was one.
+*/
+
+const SCREEN_TITLES: Record<Section, string> = {
+  overview: 'Dashboard Overview',
+  dispatch: 'Dispatch & Assignment',
+  review: 'Driver & App Review',
 };
 
 function parseAdminSection(value: unknown): Section {
@@ -114,7 +132,7 @@ export default function AdminScreen() {
       setApplications(await fetchAllApplications());
       setError(null);
     } catch (thrown) {
-      setError(thrown instanceof Error ? thrown.message : 'Could not load applications.');
+      setError(errorMessage(thrown, 'Could not load applications.'));
     } finally {
       setLoading(false);
     }
@@ -177,10 +195,7 @@ export default function AdminScreen() {
         message: `${application.fullName} — ${application.reference}`,
       });
     } catch (thrown) {
-      showDialog(
-        'Could not save the decision',
-        thrown instanceof Error ? thrown.message : 'Try again.',
-      );
+      showDialog('Could not save the decision', errorMessage(thrown, 'Try again.'));
     } finally {
       setBusyId(null);
     }
@@ -227,11 +242,13 @@ export default function AdminScreen() {
       <View style={styles.content}>
         <ScreenHeader
           brand={false}
-          title={section === 'overview' ? 'Dashboard Overview' : 'Driver & App Review'}
+          title={SCREEN_TITLES[section]}
           subtitle={
             section === 'overview'
               ? 'How the platform is running right now.'
-              : `Review within ${REVIEW_WORKING_DAYS} working days, as the Drivers page promises.`
+              : section === 'dispatch'
+                ? 'Whether LOCI matches parcels to drivers, or you do.'
+                : `Review within ${REVIEW_WORKING_DAYS} working days, as the Drivers page promises.`
           }
         />
 
@@ -244,6 +261,8 @@ export default function AdminScreen() {
         />
 
         {section === 'overview' && <OverviewPanel onReview={() => chooseSection('review')} />}
+
+        {section === 'dispatch' && <DispatchControl />}
 
         {section === 'review' && (
           <>
@@ -533,7 +552,7 @@ function DocumentRow({ label, path }: { label: string; path: string }) {
     } catch (thrown) {
       showDialog(
         'Could not open the document',
-        thrown instanceof Error ? thrown.message : 'The file may have been removed.',
+        errorMessage(thrown, 'The file may have been removed.'),
       );
     } finally {
       setBusy(false);

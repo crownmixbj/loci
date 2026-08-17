@@ -6,7 +6,7 @@ import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { EmptyState, screenPadding, ScreenHeader } from '@/components/ui/screen';
 import { SignedOutState } from '@/components/ui/signed-out-state';
-import {FontSize, MaxContentWidth, Radius, Spacing, Typography, font } from '@/constants/theme';
+import { FontSize, MaxContentWidth, Radius, Spacing, Typography, font } from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';
 import { useSession } from '@/store/session';
 
@@ -116,7 +116,17 @@ export function Metric({
   value,
   tone = 'neutral',
   hint,
+  nested = false,
 }: {
+  /**
+   * True when this card is inside a `metricSlot` wrapper.
+   *
+   * The wrapper carries the flex; the card must not carry it too. A Pressable
+   * lays its children out in a *column*, so `flexBasis: 150` on the card sets
+   * its height rather than its width — a tappable card ends up 150px tall
+   * beside static ones that size to their content, and the row stops lining up.
+   */
+  nested?: boolean;
   label: string;
   value: string | number;
   tone?: 'neutral' | 'primary' | 'success' | 'warning' | 'danger';
@@ -136,7 +146,7 @@ export function Metric({
             : theme.text;
 
   return (
-    <Card style={styles.metric}>
+    <Card style={[styles.metric, nested && styles.metricNested]}>
       <Text style={[styles.metricValue, { color }]}>{value}</Text>
       <Text style={[styles.metricLabel, { color: theme.textSecondary }]}>{label}</Text>
       {!!hint && <Text style={[styles.metricHint, { color: theme.textMuted }]}>{hint}</Text>}
@@ -156,6 +166,21 @@ export function AdminError({ message }: { message: string }) {
 }
 
 export const adminStyles = StyleSheet.create({
+  /**
+   * Wraps a Metric that is tappable.
+   *
+   * Two jobs. It carries the flex the Card would have carried, so a tappable
+   * card lines up with the static ones beside it. And it sets `cursor:
+   * 'pointer'` explicitly rather than trusting react-native-web to infer one:
+   * a `Pressable` renders a plain `div`, and a card that does not change the
+   * cursor reads as decoration no matter what handler is attached to it. On
+   * native the property is ignored.
+   */
+  metricSlot: {
+    flexGrow: 1,
+    flexBasis: 150,
+    cursor: 'pointer',
+  },
   /** Wraps to as many columns as fit; one per row on a phone. */
   metrics: {
     flexDirection: 'row',
@@ -191,6 +216,12 @@ const styles = StyleSheet.create({
     flexGrow: 1,
     flexBasis: 150,
     gap: Spacing.half,
+  },
+  /** Inside a slot: the wrapper does the flexing, this just fills it. */
+  metricNested: {
+    flexGrow: 0,
+    flexBasis: 'auto',
+    width: '100%',
   },
   metricValue: {
     fontSize: FontSize.title,

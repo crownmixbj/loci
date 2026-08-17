@@ -3,6 +3,7 @@ import { Info, MapPinned, Pencil, Plus, Store } from 'lucide-react-native';
 import { useCallback, useEffect, useState } from 'react';
 import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
 
+import { errorMessage } from '@/lib/errors';
 import { AdminError, AdminShell, Metric, adminStyles } from '@/components/ui/admin-shell';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -11,7 +12,7 @@ import { MapView, type MapMarker } from '@/components/ui/map-view';
 import { SectionLabel } from '@/components/ui/screen';
 import { openLabel, openState } from '@/constants/hub-hours';
 import { hubPosition, type Hub } from '@/constants/hubs';
-import {FontSize, Radius, Spacing, Typography, font } from '@/constants/theme';
+import { FontSize, Radius, Spacing, Typography, font } from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';
 import { fetchCityVolumes, type CityVolume } from '@/store/admin';
 import { HubEditor } from '@/components/ui/hub-editor';
@@ -60,7 +61,7 @@ export default function AdminOpsScreen() {
       setVolumes(await fetchCityVolumes());
       setError(null);
     } catch (thrown) {
-      setError(thrown instanceof Error ? thrown.message : 'Could not load volumes.');
+      setError(errorMessage(thrown, 'Could not load volumes.'));
     } finally {
       setLoading(false);
     }

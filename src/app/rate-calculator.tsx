@@ -26,7 +26,7 @@ import { SegmentedControl } from '@/components/ui/chip';
 import { ToggleRow } from '@/components/ui/dropdown';
 import { Field } from '@/components/ui/field';
 import { SectionLabel } from '@/components/ui/screen';
-import {FontSize, MaxContentWidth, Radius, Spacing, Typography, font } from '@/constants/theme';
+import { FontSize, MaxContentWidth, Radius, Spacing, Typography, font } from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';
 import {
   DELIVERY_TYPES,

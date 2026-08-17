@@ -393,7 +393,11 @@ export const Typography = {
   button: { fontSize: FontSize.small, ...font(600) },
 
   /** Footnotes, hints, timestamps. Genuinely smaller than `meta` now. */
-  caption: { fontSize: FontSize.caption, ...font(400), lineHeight: lineHeightFor(FontSize.caption) },
+  caption: {
+    fontSize: FontSize.caption,
+    ...font(400),
+    lineHeight: lineHeightFor(FontSize.caption),
+  },
   badge: { fontSize: FontSize.caption, ...font(600), letterSpacing: 0.2 },
 
   /** The floor. Overlines and dense chips only — never a sentence. */
