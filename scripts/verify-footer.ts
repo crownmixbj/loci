@@ -81,33 +81,32 @@ check(
 );
 
 /*
- * Four auth screens render through `AuthShell`, which carries the footer for
- * all of them. Anything that delegates its whole layout counts as covered.
+ * A page that hands its whole layout to `AuthShell` is covered by it.
+ *
+ * ⚠ Named by what a page *does*, not by a list of file paths.
+ *
+ *   This was a map of the four auth screens that existed at the time. Adding a
+ *   fifth — `confirm.tsx`, where email links land — failed this file for a
+ *   footer it does in fact have, because the map had not been updated. A rule
+ *   maintained by hand is a rule that fails the next person to follow it
+ *   correctly.
  */
-const DELEGATES: Record<string, string> = {
-  'src/app/(auth)/sign-in.tsx': 'AuthShell',
-  'src/app/(auth)/sign-up.tsx': 'AuthShell',
-  'src/app/(auth)/forgot-password.tsx': 'AuthShell',
-  'src/app/(auth)/verify-email.tsx': 'AuthShell',
-};
+const DELEGATE = 'AuthShell';
 
 for (const path of pages) {
   const source = code(read(path));
-  const delegate = DELEGATES[path];
 
   check(
     `${path.replace('src/app/', '')} renders the footer`,
-    /<Footer\b/.test(source) || (delegate ? new RegExp(`<${delegate}\\b`).test(source) : false),
-    delegate
-      ? `expected <Footer /> or <${delegate}>`
-      : 'a page without it is the way "every page" quietly stops being true',
+    /<Footer\b/.test(source) || new RegExp(`<${DELEGATE}\\b`).test(source),
+    `expected <Footer /> or <${DELEGATE}> — a page without either is how "every page" quietly stops being true`,
   );
 }
 
 check(
-  'AuthShell carries it for the four auth screens',
+  'AuthShell carries it for every auth screen',
   /<Footer\b/.test(code(read('src/components/ui/auth-shell.tsx'))),
-  'four screens are covered by this one file; without it they are all bare',
+  'five screens are covered by this one file; without it they are all bare',
 );
 
 /*

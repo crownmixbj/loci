@@ -24,6 +24,7 @@ import {
   type DriverApplication,
 } from '@/store/driver-applications';
 import { authErrorMessage, isEmailTakenCode, isSupabaseConfigured, supabase } from '@/lib/supabase';
+import { emailConfirmationLink } from '@/constants/links';
 import { registerForPush, unregisterPush } from '@/store/push';
 import type { City } from '@/store/bookings';
 
@@ -599,9 +600,22 @@ export function SessionProvider({
         supabase.auth.signUp({
           email: params.email.trim().toLowerCase(),
           password: params.password,
-          // Stored on the auth user, so it survives without a separate profile
-          // table. Move to a `profiles` row once there's more than name and phone.
-          options: { data: { name: params.name.trim(), phone: params.phone.trim() } },
+          options: {
+            // Stored on the auth user, so it survives without a separate profile
+            // table. Move to a `profiles` row once there's more than name and phone.
+            data: { name: params.name.trim(), phone: params.phone.trim() },
+            /*
+              ⚠ Named route, and the address travels with it.
+
+                Without `emailRedirectTo` the link lands on the project's Site
+                URL — the marketing home — where nothing reads the parameters,
+                so an expired token showed a normal home page and the person was
+                left believing the email had done something. The email on the
+                URL is what lets `/confirm` offer a resend to the right address
+                and spot a link claimed under somebody else's session.
+            */
+            emailRedirectTo: emailConfirmationLink(params.email),
+          },
         }),
       );
 

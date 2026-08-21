@@ -73,3 +73,34 @@ export function captureInstruction(): { title: string; body: string } {
         body: 'Open LOCI on your phone and scan this code from there. Your phone’s ordinary camera app will not open it — that needs a web address, which is not set up yet.',
       };
 }
+
+/**
+ * Where a confirmation email should send somebody back to.
+ *
+ * ⚠ The address rides along as a query parameter, and the landing page needs it.
+ *
+ *   Supabase puts nothing identifying on an *error* redirect — an expired link
+ *   arrives as `?error=access_denied&error_code=otp_expired` and nothing else.
+ *   With no email there is nobody to offer a fresh link to, and no way to
+ *   notice that the session already open belongs to a different person. Both of
+ *   those branches exist only because this parameter does.
+ *
+ * ⚠ Whatever this returns has to be in the project's Redirect URLs allowlist,
+ *   under Authentication → URL Configuration. Supabase silently falls back to
+ *   the Site URL for anything not on the list, which looks exactly like this
+ *   code not working. See README.
+ *
+ * On the web the current origin is used rather than `LINK_DOMAIN`, so a preview
+ * deploy confirms back into itself instead of bouncing people to production.
+ */
+export function emailConfirmationLink(email: string): string {
+  const address = `email=${encodeURIComponent(email.trim().toLowerCase())}`;
+
+  if (typeof window !== 'undefined' && window.location?.origin) {
+    return `${window.location.origin}/confirm?${address}`;
+  }
+
+  return universalLinksEnabled
+    ? `https://${LINK_DOMAIN}/confirm?${address}`
+    : `${APP_SCHEME}://confirm?${address}`;
+}

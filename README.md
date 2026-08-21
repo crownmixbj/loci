@@ -135,3 +135,27 @@ password reset links will fail in production.
   driver's confirmation email and SMS and records them. Delivery needs a
   server-side sender — a client cannot hold provider credentials.
 - **OTP collection** is described in the hub copy but not implemented.
+
+### Email confirmation links
+
+`signUp` sets `emailRedirectTo` to `<origin>/confirm?email=<address>`, so the
+link lands on a route that reads the outcome instead of the marketing home.
+
+Add that path to **Authentication → URL Configuration → Redirect URLs** for
+every origin you serve:
+
+```
+https://loci-741.pages.dev/confirm
+https://<production host>/confirm
+parcelmobile://confirm
+```
+
+⚠ Supabase silently falls back to the Site URL for any target not on that list,
+which looks identical to the app ignoring the parameters. If a confirmation link
+drops somebody on the home page, check this list before the code.
+
+The address on the query string is not something Supabase provides — it is added
+at sign-up, and two behaviours depend on it: offering a resend to the right
+address when a token has expired, and noticing that the link belongs to somebody
+other than the account already signed in on that device. See
+`src/lib/email-confirmation.ts`.

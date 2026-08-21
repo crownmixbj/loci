@@ -1,0 +1,253 @@
+/**
+ * Assertions for what happens when somebody clicks a confirmation link.
+ *
+ * ⚠ Every branch here is awkward to reach by hand, which is exactly why they
+ *   are worth pinning.
+ *
+ *   Reproducing an expired token means waiting an hour. Reproducing the
+ *   wrong-account case means two accounts, two mailboxes and a shared browser.
+ *   Nobody does that twice, so these paths get written once, tested once and
+ *   then quietly rot — while being the paths that decide whether an account
+ *   ends up confirmed against the wrong person.
+ *
+ * The rules are imported and run, not transcribed.
+ */
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+
+import {
+  hasConfirmationParams,
+  isAlreadyConfirmed,
+  parseConfirmationParams,
+  resolveConfirmation,
+} from '../src/lib/email-confirmation';
+
+let failures = 0;
+
+function check(name: string, condition: boolean, detail?: string) {
+  if (!condition) {
+    failures += 1;
+    console.error(`FAIL — ${name}${detail ? `\n       ${detail}` : ''}`);
+  }
+}
+
+const ROOT = process.cwd();
+const read = (path: string) => readFileSync(join(ROOT, path), 'utf8');
+
+const code = (source: string) =>
+  source
+    .replace(/(^|[\s{(=,;])\/\*[\s\S]*?\*\//g, '$1')
+    .replace(/\{\s*\/\*[\s\S]*?\*\/\s*\}/g, '')
+    .replace(/^\s*\/\/.*$/gm, '');
+
+// --------------------------------------------------------------- parsing ---
+
+const EXPIRED_QUERY =
+  'https://loci.example/confirm?email=ada%40example.com&error=access_denied' +
+  '&error_code=otp_expired&error_description=Email+link+is+invalid+or+has+expired';
+
+const expiredParams = parseConfirmationParams(EXPIRED_QUERY);
+
+check('the error code is read', expiredParams.errorCode === 'otp_expired', expiredParams.errorCode);
+check('and the address it was issued for', expiredParams.email === 'ada@example.com');
+check(
+  'the description is readable, not plus-encoded',
+  expiredParams.errorDescription === 'Email link is invalid or has expired',
+  expiredParams.errorDescription,
+);
+
+/*
+ * ⚠ The hash as well as the query.
+ *
+ *   PKCE puts these on the query string and the implicit flow puts them after
+ *   the `#`. Which one a project uses is a dashboard setting that somebody can
+ *   change without knowing this file exists, so both are read.
+ */
+const hashParams = parseConfirmationParams(
+  'https://loci.example/confirm#error=access_denied&error_code=otp_expired',
+);
+check('a fragment is read too', hashParams.errorCode === 'otp_expired', hashParams.errorCode);
+
+check(
+  'the email is lower-cased',
+  parseConfirmationParams('https://x/confirm?email=Ada%40Example.COM&code=1').email ===
+    'ada@example.com',
+);
+check(
+  'a bare page has no parameters',
+  !hasConfirmationParams(parseConfirmationParams('https://x/')),
+);
+
+// -------------------------------------------------------------- resolving ---
+
+const resolve = (url: string, sessionEmail: string | null = null) =>
+  resolveConfirmation({ params: parseConfirmationParams(url), sessionEmail });
+
+check('nothing on the URL means nothing to do', resolve('https://x/confirm').kind === 'nothing');
+
+check(
+  'a code with no session is exchanged',
+  resolve('https://x/confirm?code=abc&email=ada@example.com').kind === 'exchange',
+);
+
+check(
+  'an expired link offers a resend',
+  resolve(EXPIRED_QUERY).kind === 'expired',
+  'the whole point is that the person is not left on a page that says nothing',
+);
+check(
+  'and carries the address forward',
+  (() => {
+    const outcome = resolve(EXPIRED_QUERY);
+    return outcome.kind === 'expired' && outcome.email === 'ada@example.com';
+  })(),
+  'without it the resend form has nobody to send to and has to ask',
+);
+
+/*
+ * ⚠ The case this file exists for.
+ *
+ *   Somebody is signed in on a shared laptop and clicks a link belonging to
+ *   another account. Claiming it would attach one person's confirmation to
+ *   another person's session, and nothing on screen would say so.
+ */
+const mismatch = resolve('https://x/confirm?code=abc&email=ada@example.com', 'bola@example.com');
+check('a link for another account is refused', mismatch.kind === 'wrong-account', mismatch.kind);
+check(
+  'and names both sides',
+  mismatch.kind === 'wrong-account' &&
+    mismatch.signedInAs === 'bola@example.com' &&
+    mismatch.linkFor === 'ada@example.com',
+  'on a family laptop, one address alone leaves them guessing which is which',
+);
+
+/*
+ * ⚠ Checked before the expiry branch, deliberately.
+ *
+ *   An expired link belonging to somebody else must not be answered with "send
+ *   yourself a fresh one" — that hands a stranger a working route into an
+ *   account on a machine they are already sitting at.
+ */
+const staleMismatch = resolve(EXPIRED_QUERY, 'bola@example.com');
+check(
+  'an expired link for another account is still a mismatch',
+  staleMismatch.kind === 'wrong-account',
+  `resolved as ${staleMismatch.kind} — a resend offered here is a resend to somebody else's inbox`,
+);
+
+check(
+  'the same person, already signed in, is simply let through',
+  resolve('https://x/confirm?code=abc&email=ada@example.com', 'ada@example.com').kind ===
+    'already-signed-in',
+);
+check(
+  'and an expired link is not an error once they are already in',
+  resolve(EXPIRED_QUERY, 'ada@example.com').kind === 'already-signed-in',
+  'the token rotted after doing its job; that is not worth a red banner',
+);
+check(
+  'case and spacing do not make two addresses different people',
+  resolve('https://x/confirm?code=abc&email=ada@example.com', ' Ada@Example.com ').kind ===
+    'already-signed-in',
+);
+
+/*
+ * A link with no email on it — anything issued before `emailRedirectTo` carried
+ * one. It cannot be checked against the session, so a signed-in visitor is
+ * treated as already in rather than accused of a mismatch that may not exist.
+ */
+check(
+  'a link with no address does not invent a mismatch',
+  resolve('https://x/confirm?code=abc', 'ada@example.com').kind === 'already-signed-in',
+);
+
+check(
+  'an unknown refusal keeps the provider’s own words',
+  (() => {
+    const outcome = resolve('https://x/confirm?error=server_error&error_description=Down+for+now');
+    return outcome.kind === 'failed' && outcome.message === 'Down for now';
+  })(),
+  'a generic "something went wrong" throws away the only clue there is',
+);
+
+// ------------------------------------------------- already confirmed ---------
+
+/*
+ * ⚠ Supabase reports a spent token and an expired one identically, so the URL
+ *   cannot tell them apart. The resend refusing is the only trustworthy signal.
+ */
+check(
+  'a refusal naming confirmation is recognised',
+  isAlreadyConfirmed(undefined, 'Email address already confirmed') &&
+    isAlreadyConfirmed('email_address_already_confirmed', '') &&
+    isAlreadyConfirmed(undefined, 'User already registered'),
+);
+check(
+  'an unrelated refusal is not',
+  !isAlreadyConfirmed(
+    undefined,
+    'For security purposes, you can only request this once every 60 seconds',
+  ),
+  'treating a rate limit as "already confirmed" would send an unconfirmed person to a sign-in that cannot work',
+);
+
+// ----------------------------------------------------------- the wiring -----
+
+const links = code(read('src/constants/links.ts'));
+const session = code(read('src/store/session.tsx'));
+const confirm = code(read('src/app/(auth)/confirm.tsx'));
+const resend = code(read('src/components/ui/resend-verification.tsx'));
+
+check(
+  'sign-up sends the link to the confirm route',
+  session.includes('emailRedirectTo: emailConfirmationLink(params.email)'),
+  'without it the link lands on the Site URL, where nothing reads the parameters',
+);
+check(
+  'and the address travels with it',
+  links.includes('email=${encodeURIComponent(email.trim().toLowerCase())}'),
+  'an error redirect carries nothing else identifying, so two branches depend on this',
+);
+check(
+  'the confirm route is registered with the navigator',
+  read('src/app/(auth)/_layout.tsx').includes('name="confirm"'),
+  'an unregistered screen is a blank route',
+);
+check(
+  'the resend uses the signup type',
+  session.includes("supabase.auth.resend({ type: 'signup'"),
+  'the recovery type sends a password reset, which is a different email entirely',
+);
+check(
+  'the resend can ask for an address it was not given',
+  resend.includes('<Field') && resend.includes('isValidEmail'),
+  'a link that arrives without an email would otherwise offer a button with nobody to send to',
+);
+check(
+  'and turns "already confirmed" into a route rather than an error',
+  resend.includes('onAlreadyConfirmed(address)') &&
+    confirm.includes("router.replace({ pathname: '/sign-in'"),
+  'this is the only reliable way to detect a spent token, so it must not read as a failure',
+);
+check(
+  'the mismatch screen offers to sign out and re-resolve',
+  confirm.includes('await signOut()') && confirm.includes('sessionEmail: null'),
+  'sending them to sign-in instead would make them go and find the email again',
+);
+check(
+  'and nothing is claimed before they choose',
+  !/wrong-account[\s\S]{0,600}exchangeCodeForSession/.test(confirm),
+  'the entire point of the branch is that the link is left unspent',
+);
+
+if (failures > 0) {
+  console.error(`\n${failures} assertion(s) failed.`);
+  process.exit(1);
+}
+
+console.log(
+  'PASS — an expired link explains itself and offers a resend to the right address, a link\n' +
+    '       for another account is refused before anything is claimed, a link clicked twice\n' +
+    '       or clicked while already signed in is not an error, and "already confirmed" is\n' +
+    '       read from the only signal that reports it honestly.',
+);
