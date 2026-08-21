@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { errorMessage } from '@/lib/errors';
+import { DeploymentPanel } from '@/components/ui/deployment-panel';
 import { AdminError, AdminShell, Metric, adminStyles } from '@/components/ui/admin-shell';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -125,6 +126,16 @@ export default function AdminOpsScreen() {
         />
         <Metric label="Flagship hubs" value={live.filter((h) => h.flagship).length} />
       </View>
+
+      {/*
+        First on the page, above the operational panels.
+
+        Everything below it describes the network; this describes whether what
+        you are looking at is current. When it is not, nothing below can be
+        trusted either — a missing migration shows up as an empty list rather
+        than as an error.
+      */}
+      <DeploymentPanel />
 
       <SectionLabel>Parcel volume by city</SectionLabel>
       {loading ? (

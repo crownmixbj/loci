@@ -1,0 +1,100 @@
+import { buildLabel } from '@/lib/build-info';
+import { restEndpoint } from '@/lib/supabase';
+
+/**
+ * Whether the thing you are looking at is the thing that was built.
+ *
+ * ⚠ This exists because the same misunderstanding has cost three rounds.
+ *
+ *   A fix ships, the person testing it opens the app, the old behaviour is
+ *   still there, and it is reported as still broken. Every time, the code was
+ *   right and one of two things was stale: the bundle on the device, or the
+ *   schema in the database. Nothing on screen could tell them apart, so the
+ *   only way to find out was another round trip.
+ *
+ *   There is no EAS Update on this project, so a JS change needs a new binary;
+ *   the web build is deployed separately again; and migrations are run by hand.
+ *   Three clocks, none of them visible.
+ *
+ * ⚠ The database half is read from PostgREST's own OpenAPI document, not by
+ *   calling the functions.
+ *
+ *   Calling `admin_reveal_sender_identity` to see whether it exists would write
+ *   an audit line saying an administrator looked at somebody's face. A probe
+ *   with a side effect is not a probe. The root of `/rest/v1/` lists every
+ *   exposed function and changes nothing.
+ */
+
+/** A capability, and the function whose presence proves the migration ran. */
+const CAPABILITIES: { label: string; fn: string; migration: string }[] = [
+  { label: 'Parcel photos', fn: 'attach_parcel_photo', migration: '36_parcel_photos.sql' },
+  {
+    label: 'Sender identity reveal',
+    fn: 'admin_reveal_sender_identity',
+    migration: '37_admin_sender_identity.sql',
+  },
+  { label: 'Driver wallet', fn: 'request_payout', migration: '30_driver_wallet.sql' },
+  { label: 'Document expiry', fn: 'record_document', migration: '31_document_expiry.sql' },
+  { label: 'Manual dispatch', fn: 'set_dispatch_mode', migration: '32_dispatch_mode.sql' },
+  { label: 'Account erasure', fn: 'attach_identity_result', migration: '34_identity_handoff.sql' },
+];
+
+export type Capability = {
+  label: string;
+  migration: string;
+  /** Null when the schema could not be read at all. */
+  present: boolean | null;
+};
+
+export type Deployment = {
+  build: string;
+  /** Null when the schema could not be read — a network or key problem. */
+  capabilities: Capability[];
+  error: string | null;
+};
+
+/**
+ * Reads the list of functions PostgREST is currently exposing.
+ *
+ * Returns null rather than throwing: a diagnostics panel that itself fails is
+ * worse than one that says it could not tell.
+ */
+async function exposedFunctions(): Promise<Set<string> | null> {
+  const { url, anonKey } = restEndpoint;
+  if (!url || !anonKey) return null;
+
+  try {
+    const response = await fetch(`${url}/rest/v1/`, {
+      headers: { apikey: anonKey, Authorization: `Bearer ${anonKey}` },
+    });
+    if (!response.ok) return null;
+
+    const spec = (await response.json()) as { paths?: Record<string, unknown> };
+    const paths = Object.keys(spec.paths ?? {});
+
+    return new Set(
+      paths.filter((path) => path.startsWith('/rpc/')).map((path) => path.slice('/rpc/'.length)),
+    );
+  } catch {
+    return null;
+  }
+}
+
+export async function fetchDeployment(): Promise<Deployment> {
+  const exposed = await exposedFunctions();
+
+  return {
+    build: buildLabel(),
+    capabilities: CAPABILITIES.map(({ label, fn, migration }) => ({
+      label,
+      migration,
+      present: exposed ? exposed.has(fn) : null,
+    })),
+    error: exposed ? null : 'The database schema could not be read from here.',
+  };
+}
+
+/** How many migrations are missing, for the one-line summary. */
+export function missingCount(capabilities: Capability[]): number {
+  return capabilities.filter((capability) => capability.present === false).length;
+}

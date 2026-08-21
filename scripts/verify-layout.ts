@@ -106,86 +106,75 @@ check(
 // ---------------------------------------------------- Post a Parcel chrome ---
 
 /*
- * The title and delivery type are siblings of the ScrollView, not children.
+ * ⚠ These assertions used to require the opposite, and the reversal is the
+ *   point rather than a regression.
  *
- * React Native has no `position: sticky`. The only arrangement that keeps a
- * block still while content moves under it is to put it outside the scroll
- * container — the same thing `StickyHeaderScreen` does.
+ *   The title, the delivery type and the rate were pinned: a sibling of the
+ *   ScrollView, which is the only arrangement that keeps a block still in React
+ *   Native. The reasoning was sound — the delivery type is not a form field, it
+ *   sets the price and decides which questions appear, so scrolling it away
+ *   leaves somebody filling in a form with no sign of which of the two it is.
  *
- * The split is anchored on the ref rather than on `<ScrollView`, because
- * `useRef<ScrollView>(null)` appears four hundred lines above the render as a
- * type argument: searching for the tag finds the annotation first and slices an
- * empty string, which failed every assertion below for the wrong reason.
+ *   What it cost was about 140px of every screen, permanently, on the longest
+ *   form in the app. On a phone that is a third of the space available to
+ *   answer the questions underneath it. The block scrolls now.
+ *
+ *   What is still worth guarding is what has not changed: there is exactly one
+ *   delivery-type control, the rate stays beside it, and both sit at the top of
+ *   the page rather than somewhere in the middle of the form.
  */
 const scrollStart = bookCode.indexOf('ref={scrollRef}');
-
-const pinnedBlock = bookCode.slice(bookCode.indexOf('<KeyboardAvoidingView'), scrollStart);
-
-/*
- * The title, not the component that used to render it.
- *
- * This pinned `<ScreenHeader`, which stopped being how the title is drawn when
- * the header was slimmed — `ScreenHeader` renders at 28px with 24px of margin,
- * which cost about 60px of a phone screen on each of three wizard steps for a
- * word the tab bar already says. The property under test is unchanged: whatever
- * draws the title, it must sit above the scroller.
- */
-check(
-  'the screen title is outside the ScrollView',
-  /Post a Parcel/.test(pinnedBlock),
-  'inside it, the title scrolls away under the status bar — the reported bug',
-);
-check(
-  'and it is no longer a full ScreenHeader',
-  !pinnedBlock.includes('<ScreenHeader'),
-  'a 28px title pinned above a three-step form spends a phone screen on one word',
-);
-check(
-  'the delivery type selector is outside the ScrollView',
-  pinnedBlock.includes('<SegmentedControl'),
-  'it decides the price line and which fields appear, so it cannot scroll out of sight',
-);
-check(
-  'the price hint travels with the selector',
-  pinnedBlock.includes('PRICING.base.local'),
-  'a selector pinned away from the rate it sets is worse than neither being pinned',
-);
-
 const scrollBlock = bookCode.slice(scrollStart);
 
 check(
-  'the form fields are still inside the ScrollView',
-  scrollBlock.includes('Item details') && scrollBlock.includes('<PhotoPicker'),
-  'the whole point is that the form scrolls',
+  'the title, the delivery type and the rate all scroll with the form',
+  /Post a Parcel/.test(scrollBlock) &&
+    scrollBlock.includes('<SegmentedControl') &&
+    scrollBlock.includes('PRICING.base.local'),
+  'pinned, they spend a third of a phone screen on chrome above the questions',
 );
 check(
-  'the pinned block is not repeated inside the scroll area',
-  !scrollBlock.includes('<ScreenHeader') && !scrollBlock.includes('<SegmentedControl'),
-  'two delivery type selectors would disagree the moment one was tapped',
+  'and nothing is left pinned above the scroller',
+  !/Post a Parcel|<SegmentedControl/.test(
+    bookCode.slice(bookCode.indexOf('<KeyboardAvoidingView'), scrollStart),
+  ),
+  'half in and half out is the arrangement that looks like a bug rather than a decision',
+);
+
+check(
+  'there is exactly one delivery type control',
+  (bookCode.match(/<SegmentedControl/g) ?? []).length === 1,
+  'two would disagree the moment one was tapped',
+);
+check(
+  'the rate travels with the selector',
+  (() => {
+    const selector = scrollBlock.indexOf('<SegmentedControl');
+    const rate = scrollBlock.indexOf('PRICING.base.local');
+    return rate > selector && rate - selector < 900;
+  })(),
+  'somebody choosing between the two pills is choosing on price',
+);
+check(
+  'the block is the first thing on the page, above the step indicator',
+  scrollBlock.indexOf('<SegmentedControl') < scrollBlock.indexOf('<WizardProgress'),
+  'a delivery type found halfway down the form is one people answer around',
+);
+check(
+  'the title is not a full ScreenHeader',
+  !bookCode.includes('<ScreenHeader'),
+  'a 28px title with 24px of margin is for a page you arrive at and read, not the top of a form',
 );
 
 check(
   'the ScrollView is bounded',
   flat(bookCode).includes('<ScrollView ref={scrollRef} style={styles.flex}'),
-  'without flex:1 it sizes to its content and pushes the pinned block off screen',
+  'without flex:1 it sizes to its content rather than the window',
 );
-
-/*
- * The pinned block sets its own padding rather than reusing `screenPadding`.
- *
- * That constant carries `paddingBottom: Spacing.six` — 64px meant for the end
- * of a scrolling page. Under a pinned header it is dead space that pushes the
- * form off a small screen.
- */
 check(
-  'the pinned block does not reuse screenPadding',
+  'the page does not reuse screenPadding',
   !bookCode.includes('screenPadding'),
-  'its bottom padding is sized for the end of a page, not the top of one',
-);
-check(
-  'the pinned block is opaque',
-  flat(bookCode).includes('backgroundColor: theme.background, borderBottomColor: theme.border'),
-  'content scrolling under a transparent header is unreadable',
+  'this screen sets its own; the shared constant is sized for pages with a ScreenHeader',
 );
 
 /*
@@ -279,24 +268,30 @@ check(
  * of a ScrollView looks identical to one rendered beside it, and the difference
  * only shows on a phone once there is enough content to scroll.
  */
-const headerInsideScroller = ['src/components/ui/driver-hub.tsx', 'src/app/(tabs)/book.tsx'].filter(
-  (path) => {
-    const source = code(read(path));
-    /*
-     * The JSX element, not the type.
-     *
-     * `useRef<ScrollView>(null)` is declared near the top of book.tsx and
-     * contains the literal `<ScrollView`, so a plain indexOf finds it hundreds
-     * of lines above the real element and reports a screen as broken when it is
-     * not. Requiring whitespace after the name excludes `<ScrollView>`.
-     */
-    const scroller = source.search(/<ScrollView[\s\n]/);
-    if (scroller === -1) return false;
-    // The identity/title block must be declared before the scroller opens.
-    const pinned = Math.max(source.indexOf('const header = ('), source.indexOf('styles.pinned'));
-    return pinned === -1 || pinned > scroller;
-  },
-);
+/*
+ * ⚠ `book.tsx` was on this list and no longer is.
+ *
+ *   Its header is now deliberately inside the scroller — see the reversal noted
+ *   at the top of this file. The Driver Hub's is not: that one is a phone
+ *   screen whose bell is the only sign that something needs attention, and it
+ *   has to stay on screen while the job list moves under it.
+ */
+const headerInsideScroller = ['src/components/ui/driver-hub.tsx'].filter((path) => {
+  const source = code(read(path));
+  /*
+   * The JSX element, not the type.
+   *
+   * `useRef<ScrollView>(null)` is declared near the top of book.tsx and
+   * contains the literal `<ScrollView`, so a plain indexOf finds it hundreds
+   * of lines above the real element and reports a screen as broken when it is
+   * not. Requiring whitespace after the name excludes `<ScrollView>`.
+   */
+  const scroller = source.search(/<ScrollView[\s\n]/);
+  if (scroller === -1) return false;
+  // The identity/title block must be declared before the scroller opens.
+  const pinned = Math.max(source.indexOf('const header = ('), source.indexOf('styles.pinned'));
+  return pinned === -1 || pinned > scroller;
+});
 
 check(
   'no screen with a pinned block renders it inside its scroller',
@@ -416,7 +411,7 @@ if (failures > 0) {
 console.log(
   'PASS — every native screen reserves the status bar exactly once, the build banner and\n' +
     '       the layouts never both claim it, on Post a Parcel the title, the delivery type\n' +
-    '       and its rate stay pinned while only the form scrolls underneath, the driver\n' +
+    '       and its rate scroll with the form as one block at the top of it, the driver\n' +
     '       identity and bell stay put while the hub scrolls under them, no route stretches\n' +
     '       its content across a desktop viewport, and the top header stays a plain block in\n' +
     '       normal flow — no scroll listener, no animated layout, nothing to stutter.',

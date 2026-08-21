@@ -24,6 +24,11 @@ const MIME_BY_EXTENSION: Record<string, string> = {
   jpeg: 'image/jpeg',
   png: 'image/png',
   heic: 'image/heic',
+  /*
+    `heif` alongside `heic`, because `lib/upload.ts` has always known both and
+    the bucket refused one of them. See 35_heif_uploads.sql.
+  */
+  heif: 'image/heif',
   webp: 'image/webp',
   pdf: 'application/pdf',
 };

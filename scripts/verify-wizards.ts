@@ -165,15 +165,15 @@ const bookAssigned = bookSteps.flat();
 /*
  * `deliveryType` is exempt, and it is the only exemption.
  *
- * It is the pinned pill toggle above the wizard — live on all three pages — and
+ * It is the pill toggle at the top of the form — live on all three pages — and
  * a segmented control has no invalid state, so no step needs to validate it.
  * Named explicitly rather than filtered by a rule, so a second exemption has to
  * be argued for here rather than slipped in.
  */
-const PINNED_FIELDS = ['deliveryType'];
+const ALWAYS_VISIBLE_FIELDS = ['deliveryType'];
 
 const bookMissing = bookingKeys.filter(
-  (key) => !bookAssigned.includes(key) && !PINNED_FIELDS.includes(key),
+  (key) => !bookAssigned.includes(key) && !ALWAYS_VISIBLE_FIELDS.includes(key),
 );
 const bookUnknown = bookAssigned.filter((key) => !bookingKeys.includes(key));
 const bookDuplicated = bookAssigned.filter((key, i) => bookAssigned.indexOf(key) !== i);
@@ -190,10 +190,20 @@ check(
 );
 check('and none is claimed twice', bookDuplicated.length === 0, bookDuplicated.join(', '));
 
+/*
+ * ⚠ The second half of this used to require the toggle to sit *above the
+ *   scroller*. It scrolls with the form now — see `verify-layout` for why — so
+ *   what is asserted is the property that survived the move: it is outside
+ *   every step's conditional, and therefore on screen on all three pages.
+ *
+ *   Dropping it into a step would be the real failure. It changes the price and
+ *   the shape of every question below it, so a copy that only exists on page
+ *   one leaves pages two and three unable to say which delivery this is.
+ */
 check(
-  'the pinned toggle is still pinned rather than dropped onto a step',
+  'the delivery toggle is on every step rather than dropped onto one',
   !bookAssigned.includes('deliveryType') &&
-    code(book).indexOf('<SegmentedControl') < code(book).indexOf('ref={scrollRef}'),
+    code(book).indexOf('<SegmentedControl') < code(book).indexOf('{step === 0 &&'),
   'it changes the price of every question below it, so it belongs above all three steps',
 );
 

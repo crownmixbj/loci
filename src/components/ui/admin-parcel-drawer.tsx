@@ -2,6 +2,7 @@ import { Eye, EyeOff, PackageOpen, Radio, ShieldAlert } from 'lucide-react-nativ
 import { useCallback, useEffect, useState } from 'react';
 import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
 
+import { ParcelPhotos } from '@/components/ui/parcel-photos';
 import { Badge } from '@/components/ui/badge';
 import { BottomSheet } from '@/components/ui/bottom-sheet';
 import { Button } from '@/components/ui/button';
@@ -322,8 +323,20 @@ function ParcelDetail({ id, onBack }: { id: string; onBack: () => void }) {
         </Text>
       </View>
 
+      {/*
+        The photographs, above the checks that describe them.
+
+        "Photo on file: Yes" used to be the whole of it — a boolean about an
+        image nobody could open. The parcel's own photo is shown outright; the
+        sender's face costs a reason and is logged. See `parcel-photos.tsx`.
+      */}
+      <ParcelPhotos
+        bookingId={detail.id}
+        itemPhotoPath={detail.itemPhotoPath}
+        hasSenderPhoto={detail.hasSenderPhoto}
+      />
+
       <SectionLabel>Sender check</SectionLabel>
-      <Row label="Photo on file" value={detail.hasSenderPhoto ? 'Yes' : 'No'} />
       <Row label="Liveness" value={detail.livenessStatus ?? 'not checked'} />
 
       {/* ---------- the audited door ---------- */}

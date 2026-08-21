@@ -24,6 +24,20 @@ const supabaseAnonKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY ?? '';
 export const isSupabaseConfigured = Boolean(supabaseUrl && supabaseAnonKey);
 
 /**
+ * The REST root and its key, for the one thing the client cannot answer.
+ *
+ * PostgREST publishes an OpenAPI document at the root of `/rest/v1/`, listing
+ * every function it currently exposes. Reading it is how the app can tell
+ * whether a migration has actually been applied to the project it is talking
+ * to — a question `supabase-js` has no method for, and one that has now cost
+ * three rounds of "the fix is in, it still does not work".
+ *
+ * ⚠ Exported for `store/deployment.ts` and nothing else. Anything that wants
+ *   data should go through `supabase` above, which handles auth and retries.
+ */
+export const restEndpoint = { url: supabaseUrl, anonKey: supabaseAnonKey };
+
+/**
  * True only in a real browser — false on native, and false during the Node
  * pre-render pass.
  *

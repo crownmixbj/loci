@@ -55,6 +55,8 @@ import { useTheme } from '@/hooks/use-theme';
 import { isSupabaseConfigured } from '@/lib/supabase';
 import { IdentityOnboarding } from '@/components/ui/identity-onboarding';
 import { consumeCaptureSession } from '@/store/capture-session';
+import { uploadParcelPhoto } from '@/store/parcel-photos';
+import { showToast } from '@/components/ui/toast';
 import {
   fetchSenderIdentity,
   ninError,
@@ -975,6 +977,32 @@ export default function BookScreen() {
       } catch {
         // Photo stored, link not made. Recoverable by hand; the parcel is safe.
       }
+
+      /*
+       * And the photograph of the parcel itself, which until now was thrown
+       * away.
+       *
+       * ⚠ The form has required this since it shipped and nothing ever stored
+       *   it. `bookings-remote.ts` sent `item_photo_uri: null` on purpose —
+       *   the picker returns a local `file://` URI that means nothing on
+       *   another device — so a sender was asked for evidence of condition at
+       *   handover and it was discarded at the door. See 36_parcel_photos.sql.
+       *
+       * Uploaded here rather than at capture, because the storage policy checks
+       * the object's folder against a booking whose sender is the caller: there
+       * has to be a parcel first. Same swallow as the session above, for the
+       * same reason — the parcel is posted and has a tracking id, and a failed
+       * photo upload must not send somebody back to a form they have finished.
+       */
+      if (form.itemPhotoUri) {
+        const stored = await uploadParcelPhoto(booking.id, form.itemPhotoUri);
+        if (!stored.ok) {
+          showToast('Parcel photo not saved', {
+            message: `${stored.error} Your parcel is posted — support can add the photo.`,
+            tone: 'info',
+          });
+        }
+      }
     }
 
     // Posted and stored — the draft has done its job.
@@ -998,67 +1026,6 @@ export default function BookScreen() {
     <KeyboardAvoidingView
       style={[styles.flex, { backgroundColor: theme.background }]}
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-      {/*
-        Pinned: the title and the delivery type.
-
-        A *sibling* of the scroll container rather than its first child — the
-        same arrangement `StickyHeaderScreen` uses, and the only one that keeps
-        a block still while content moves under it without React Native needing
-        a concept of `position: sticky`.
-
-        The delivery type is pinned along with the title rather than left in the
-        form because it is not a form field: it changes the price line, which
-        fields appear below, and which cities are selectable. Scrolling it out
-        of sight leaves you filling in a form with no visible indication of
-        which of the two it is.
-
-        There is no subtitle. "Four short sections" described the form rather
-        than telling anyone anything they could act on, and it cost two lines of
-        a block that is now on screen permanently. The fee still appears above
-        the confirm button, which was the only promise in that sentence.
-      */}
-      <View
-        style={[
-          styles.pinned,
-          { backgroundColor: theme.background, borderBottomColor: theme.border },
-        ]}>
-        <View style={styles.pinnedInner}>
-          {/*
-            A title, not a screen header.
-
-            `ScreenHeader` renders at `screenTitle` — 28px with 24px of margin
-            beneath — which is right for a page you arrive at and read, and wrong
-            for a strip that stays pinned above a scrolling form. It was costing
-            about 60px of a phone's screen on every one of three pages, in
-            service of a word the tab bar already says.
-
-            The delivery-type pills matter far more than the title does: they
-            change the price and the shape of every question below, and they are
-            the one control that stays live across all three steps. So they get
-            the space.
-          */}
-          <Text style={[styles.pinnedTitle, { color: theme.text }]}>Post a Parcel</Text>
-
-          <SegmentedControl
-            options={DELIVERY_TYPES}
-            selected={form.deliveryType}
-            onSelect={setDeliveryType}
-            renderLabel={(type) => DELIVERY_TYPE_TITLES[type]}
-          />
-
-          {/*
-            The pricing line stays. It is the only place the base fare appears
-            before the summary on page three, and somebody choosing between the
-            two pills is choosing on price.
-          */}
-          <Text style={[styles.hint, { color: theme.textMuted }]}>
-            {isLocal
-              ? `Within one city · base ${formatNaira(PRICING.base.local)} + ${formatNaira(PRICING.perKg.local)}/kg`
-              : `Between two cities · base ${formatNaira(PRICING.base.interstate)} + ${formatNaira(PRICING.perKg.interstate)}/kg`}
-          </Text>
-        </View>
-      </View>
-
       <ScrollView
         ref={scrollRef}
         style={styles.flex}
@@ -1066,6 +1033,56 @@ export default function BookScreen() {
         keyboardShouldPersistTaps="handled"
         keyboardDismissMode="on-drag">
         <View style={styles.content}>
+          {/*
+            The title and the delivery type, scrolling with the form.
+
+            ⚠ These used to be pinned — a sibling of the ScrollView rather than
+              a child of it, which is the only arrangement that keeps a block
+              still in React Native.
+
+              The reasoning then was that the delivery type is not a form field:
+              it sets the price line, decides which fields appear below, and
+              limits which cities are selectable, so scrolling it away leaves
+              you filling in a form with no visible sign of which of the two it
+              is. That is all still true — and it bought about 140px of every
+              screen, permanently, on the longest form in the app.
+
+              The answer to "which of the two is this" is on screen twice more
+              anyway: the price summary on page three names the delivery type,
+              and the fields themselves differ. What a pinned strip cost was
+              room to fill in the form it sat above.
+          */}
+          <View style={[styles.intro, { borderBottomColor: theme.border }]}>
+            {/*
+              A title, not a screen header.
+
+              `ScreenHeader` renders at `screenTitle` — 28px with 24px of margin
+              beneath — which is right for a page you arrive at and read, and
+              heavy for the top of a three-step form. The delivery-type pills
+              matter more than the title does: they change the price and the
+              shape of every question below. So they get the space.
+            */}
+            <Text style={[styles.introTitle, { color: theme.text }]}>Post a Parcel</Text>
+
+            <SegmentedControl
+              options={DELIVERY_TYPES}
+              selected={form.deliveryType}
+              onSelect={setDeliveryType}
+              renderLabel={(type) => DELIVERY_TYPE_TITLES[type]}
+            />
+
+            {/*
+              The pricing line stays. It is the only place the base fare appears
+              before the summary on page three, and somebody choosing between the
+              two pills is choosing on price.
+            */}
+            <Text style={[styles.hint, { color: theme.textMuted }]}>
+              {isLocal
+                ? `Within one city · base ${formatNaira(PRICING.base.local)} + ${formatNaira(PRICING.perKg.local)}/kg`
+                : `Between two cities · base ${formatNaira(PRICING.base.interstate)} + ${formatNaira(PRICING.perKg.interstate)}/kg`}
+            </Text>
+          </View>
+
           {/* --------------------------------------------- the wizard ---- */}
           <WizardProgress steps={STEPS} current={step} onJump={setStep} />
 
@@ -1705,40 +1722,27 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   /**
-   * The pinned block.
+   * The title, the delivery type and the rate, as the first block of the page.
    *
-   * `screenPadding` is not reused here because it carries a bottom padding
-   * meant for the end of a scrolling page — 64px of empty space under the
-   * delivery type would push the form off a small screen.
-   *
-   * The hairline underneath is what makes the pinning legible: without it the
-   * form appears to slide into the title rather than under it.
+   * No `zIndex`, no opaque fill, no horizontal padding: it is inside the
+   * scroller now, so nothing passes under it and the content container already
+   * supplies the gutters. The hairline stays — it separated the block from the
+   * form when the block was pinned, and it still marks where the chrome ends
+   * and the questions begin.
    */
-  pinned: {
-    paddingHorizontal: Spacing.four,
-    paddingTop: Spacing.four,
+  intro: {
+    gap: Spacing.three,
     paddingBottom: Spacing.three,
-    alignItems: 'center',
     borderBottomWidth: StyleSheet.hairlineWidth,
-    zIndex: 2,
   },
   /** 17px semi-bold, against `screenTitle`'s 28px extra-bold. */
-  pinnedTitle: {
+  introTitle: {
     ...Typography.sectionTitle,
     marginBottom: Spacing.two,
   },
-  pinnedInner: {
-    width: '100%',
-    maxWidth: MaxContentWidth,
-    gap: Spacing.three,
-  },
-  /**
-   * Less top padding than `screenPadding`: the pinned block above already
-   * provides the separation, and repeating it opens a visible gap.
-   */
   scrollContent: {
     paddingHorizontal: Spacing.four,
-    paddingTop: Spacing.three,
+    paddingTop: Spacing.four,
     paddingBottom: Spacing.six,
   },
   content: {

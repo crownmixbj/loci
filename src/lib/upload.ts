@@ -1,3 +1,9 @@
+import { File as FileSystemFile } from 'expo-file-system';
+import { Platform } from 'react-native';
+
+import { buildLabel } from '@/lib/build-info';
+import { errorMessage } from '@/lib/errors';
+
 /**
  * Reading a local file so Supabase Storage will accept it.
  *
@@ -89,14 +95,81 @@ export function assertImageBytes(file: FileBytes, what = 'photo'): FileBytes {
   return file;
 }
 
+/** The bit before the `:`, for error messages. `file`, `content`, `ph`, `blob`. */
+function schemeOf(uri: string): string {
+  return /^([a-z][a-z0-9+.-]*):/i.exec(uri.trim())?.[1]?.toLowerCase() ?? 'none';
+}
+
 /**
  * Reads a local file as bytes.
  *
  * `contentTypeHint` wins when the caller genuinely knows better — a document
  * picker reports the type the OS assigned, which beats guessing from an
  * extension the user may have typed.
+ *
+ * ⚠ The file system first, the network stack only as a fallback.
+ *
+ *   `readFileBytes` used to be XHR alone, and a driver taking their selfie on a
+ *   real phone got "Could not read that file off this device." — which is this
+ *   file's own words for `XMLHttpRequest.onerror`.
+ *
+ *   The reason is that XHR is a *network* client being asked to open a local
+ *   path. On Android it is backed by OkHttp, which speaks http and https and
+ *   nothing else; whether a `file://` read works at all depends on which
+ *   request handlers happen to be registered, and `content://` — what the OS
+ *   hands back for anything reached through the storage framework — it cannot
+ *   open under any circumstances. The photo was on the device the whole time.
+ *
+ *   `expo-file-system` reads through the platform's own file APIs, so the
+ *   scheme is its problem rather than ours. It is not a new dependency: `expo`
+ *   depends on it directly, so it is already linked into every build this app
+ *   has ever produced.
+ *
+ *   XHR stays for the web, where the two things a browser hands back — a
+ *   `blob:` URL from the camera element and a `data:` URL — are exactly what it
+ *   is good at, and what the file system module has no view of.
  */
-export function readFileBytes(uri: string, contentTypeHint?: string): Promise<FileBytes> {
+export async function readFileBytes(uri: string, contentTypeHint?: string): Promise<FileBytes> {
+  const contentType = contentTypeHint || contentTypeFor(uri) || 'application/octet-stream';
+
+  if (Platform.OS !== 'web') {
+    try {
+      const bytes = await new FileSystemFile(uri).arrayBuffer();
+
+      if (bytes.byteLength === 0) {
+        throw new Error('That file came back empty — try again.');
+      }
+
+      return { bytes, contentType };
+    } catch (thrown) {
+      /*
+       * Fall through to XHR rather than failing here.
+       *
+       * This path is new, and the old one worked for most people for months.
+       * If there is a URI shape the file system module refuses and the network
+       * stack accepts, the person holding the phone should not be the one who
+       * finds out — they get the old behaviour, and the message below carries
+       * both failures.
+       */
+      return readFileBytesOverXhr(uri, contentType).catch(() => {
+        /*
+         * `errorMessage`, not `thrown instanceof Error ? …`.
+         *
+         * The rejection here comes from a native module and may well be a plain
+         * object; the ternary would turn its message into the fallback and
+         * throw away the only description of what went wrong. `verify-admin`
+         * refuses that shape anywhere in `src` for exactly this reason.
+         */
+        const reason = errorMessage(thrown, 'Could not read that file off this device.');
+        throw new Error(`${reason} (${schemeOf(uri)} URI, ${Platform.OS}, ${buildLabel()})`);
+      });
+    }
+  }
+
+  return readFileBytesOverXhr(uri, contentType);
+}
+
+function readFileBytesOverXhr(uri: string, contentType: string): Promise<FileBytes> {
   return new Promise((resolve, reject) => {
     const request = new XMLHttpRequest();
 
@@ -108,23 +181,22 @@ export function readFileBytes(uri: string, contentTypeHint?: string): Promise<Fi
         return;
       }
 
-      resolve({
-        bytes,
-        /*
-         * The name first, the response header last.
-         *
-         * A `file://` read has no useful header, and the one RN invents is what
-         * got a perfectly good JPEG rejected as text/plain.
-         */
-        contentType:
-          contentTypeHint ||
-          contentTypeFor(uri) ||
-          request.getResponseHeader('content-type') ||
-          'application/octet-stream',
-      });
+      /*
+       * The name decides the content type, never the response header.
+       *
+       * A `file://` read has no useful header, and the one RN invents is what
+       * got a perfectly good JPEG rejected as text/plain. The caller has
+       * already resolved it from the file name before we get here.
+       */
+      resolve({ bytes, contentType });
     };
 
-    request.onerror = () => reject(new Error('Could not read that file off this device.'));
+    request.onerror = () =>
+      reject(
+        new Error(
+          `Could not read that file off this device. (${schemeOf(uri)} URI, ${Platform.OS}, ${buildLabel()})`,
+        ),
+      );
     request.onabort = () => reject(new Error('Reading the file was interrupted.'));
     request.ontimeout = () => reject(new Error('Reading the file timed out.'));
 

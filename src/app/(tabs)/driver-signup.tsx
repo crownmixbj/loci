@@ -775,6 +775,23 @@ export default function DriverSignupScreen() {
       const asset = result.assets[0];
       if (!asset) return;
 
+      /*
+        ⚠ The same size check the file browser does.
+
+          `pickDocumentFile` refuses anything over the cap before it reaches the
+          form; this path did not, so a camera photo above it was accepted here
+          and rejected at submit — after thirty other fields had been filled in,
+          with the failure attached to the wrong action. A modern phone shooting
+          at full resolution clears 10 MB without trying.
+      */
+      if (asset.fileSize && asset.fileSize > MAX_DOCUMENT_BYTES) {
+        showDialog(
+          'Photo too large',
+          `That came out at ${Math.round(asset.fileSize / 1024 / 1024)} MB. Attachments must be under ${MAX_DOCUMENT_MB} MB.`,
+        );
+        return;
+      }
+
       setDocuments((prev) => ({
         ...prev,
         [key]: {

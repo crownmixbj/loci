@@ -444,6 +444,14 @@ export type AdminParcelDetail = {
   driverName: string | null;
   driverId: string | null;
   hasSenderPhoto: boolean;
+  /*
+    The parcel's own photograph, as an object path rather than a boolean.
+
+    Unlike the sender's face this is operational — a box on a table — so it
+    comes back with the rest of the detail rather than through the audited
+    reveal. See `36_parcel_photos.sql` for the split.
+  */
+  itemPhotoPath: string | null;
   livenessStatus: string | null;
   offersMade: number;
   offerOutstanding: boolean;
@@ -525,6 +533,7 @@ export async function fetchAdminParcelDetail(id: string): Promise<AdminParcelDet
     driverName: maybeText(row.driver_name),
     driverId: maybeText(row.driver_id),
     hasSenderPhoto: row.has_sender_photo === true,
+    itemPhotoPath: maybeText(row.item_photo_path),
     livenessStatus: maybeText(row.liveness_status),
     offersMade: num(row.offers_made),
     offerOutstanding: row.offer_outstanding === true,

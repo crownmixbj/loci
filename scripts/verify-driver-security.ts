@@ -39,9 +39,22 @@ function check(name: string, condition: boolean, detail?: string) {
 const ROOT = process.cwd();
 const read = (path: string) => readFileSync(join(ROOT, path), 'utf8');
 
+/*
+ * ⚠ `/*` only counts as a comment when something could precede it.
+ *
+ *   `driver-signup.tsx` passes `type: ['image/*', 'application/pdf']` to the
+ *   document picker. The old pattern saw the `/*` inside that string, ran to
+ *   the next real `*\/` hundreds of lines below, and deleted everything in
+ *   between — including a guard this file asserts the presence of, and,
+ *   worse, code that other negative assertions were checking the *absence* of.
+ *   Those passed for the best part of a day by examining a truncated file.
+ *
+ *   Requiring a boundary character in front distinguishes a comment opener
+ *   from two characters in the middle of a string.
+ */
 const code = (source: string) =>
   source
-    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/(^|[\s{(=,;])\/\*[\s\S]*?\*\//g, '$1')
     .replace(/\/\/.*$/gm, '')
     .replace(/^\s*--.*$/gm, '');
 

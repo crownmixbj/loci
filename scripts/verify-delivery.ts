@@ -421,17 +421,61 @@ async function uploadChecks() {
     code(read('src/lib/upload.ts')).includes("request.responseType = 'arraybuffer'"),
     'React Native decodes this natively and it needs neither Blob nor FileReader',
   );
+  /*
+   * ⚠ This used to assert the name was consulted *before* the response header.
+   *
+   *   The header is not consulted at all any more, so the old check compared a
+   *   real index against -1 and failed on a change that made it more true. The
+   *   rule was never about ordering — it is that the header must not decide the
+   *   type — so it is now asserted as an absence.
+   */
   check(
     'and takes the content type from the name, never from the response header',
-    (() => {
-      const source = code(read('src/lib/upload.ts'));
-      return (
-        source.indexOf('contentTypeFor(uri)') <
-          source.indexOf("request.getResponseHeader('content-type')") &&
-        source.includes('contentTypeHint ||')
-      );
-    })(),
+    !code(read('src/lib/upload.ts')).includes("getResponseHeader('content-type')") &&
+      code(read('src/lib/upload.ts')).includes('contentTypeHint || contentTypeFor(uri)'),
     'a file:// read reports text/plain, which is exactly what the sender-photo bucket rejected',
+  );
+
+  /*
+   * ---------- reading the file at all ----------
+   *
+   * "Could not read that file off this device." reached a driver taking their
+   * selfie for the application. That message is this file's own words for
+   * `XMLHttpRequest.onerror` — XHR being a network client asked to open a local
+   * path, backed on Android by a stack that speaks http and https and nothing
+   * else. The photo was on the phone the whole time.
+   */
+  check(
+    'a local file is read through the file system, not the network stack',
+    code(read('src/lib/upload.ts')).includes('new FileSystemFile(uri).arrayBuffer()'),
+    'XHR cannot open content:// under any circumstances, and file:// only when a handler happens to be registered',
+  );
+  check(
+    'on native only — the web hands back blob: and data:, which XHR is good at',
+    /Platform\.OS !== 'web'[\s\S]{0,200}new FileSystemFile/.test(code(read('src/lib/upload.ts'))),
+    'the file system module has no view of a blob URL from a browser camera element',
+  );
+  /*
+   * ⚠ Matched on the fallback's own shape, not on "a catch near an XHR call".
+   *
+   *   My first version was `/catch[\s\S]{0,400}readFileBytesOverXhr/`, and
+   *   deleting the fallback left it green — 400 characters later comes the
+   *   *web* path, which calls the same function for an unrelated reason. An
+   *   assertion satisfied by a line it is not about is not an assertion.
+   */
+  check(
+    'with the old path kept as a fallback',
+    code(read('src/lib/upload.ts')).includes(
+      'return readFileBytesOverXhr(uri, contentType).catch(',
+    ),
+    'the person holding the phone should not be the one who discovers a URI shape the new reader refuses',
+  );
+  check(
+    'and a failure names the scheme, the platform and the build',
+    /schemeOf\(uri\)\} URI, \$\{Platform\.OS\}, \$\{buildLabel\(\)\}/.test(
+      code(read('src/lib/upload.ts')),
+    ),
+    'the first report of this said only that a file could not be read — nothing about what kind of file, on what, from which bundle',
   );
   /*
    * Positive, not a ban on one spelling.
