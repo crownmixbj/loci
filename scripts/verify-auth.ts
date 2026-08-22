@@ -229,6 +229,47 @@ check(
     confirm.includes("router.replace({ pathname: '/sign-in'"),
   'this is the only reliable way to detect a spent token, so it must not read as a failure',
 );
+/*
+ * ⚠ The heading is asserted as an exact string, which is unusual here and
+ *   deliberate: it was specified as exact.
+ *
+ *   Most copy in this repo is checked loosely, because pinning a sentence makes
+ *   a test that fails on every rewording. This one is a specific requirement
+ *   rather than a phrasing choice, so it is pinned to the character.
+ */
+check(
+  'a verified email says so, in those words',
+  confirm.includes('title="Email Verified Successfully"'),
+  'specified exactly; a near-miss like "Email verified successfully" is a different string',
+);
+check(
+  'and the screen stays put rather than redirecting past itself',
+  /label="Continue to LOCI" onPress=\{\(\) => router\.replace\('\/'\)\}/.test(
+    confirm.replace(/\s+/g, ' '),
+  ),
+  'a success screen replaced on a timer flickers past, which is how people end up clicking the link twice',
+);
+
+/*
+ * ⚠ And it is only shown once a session actually exists.
+ *
+ *   Under PKCE the code verifier lives on the device that signed up, so a link
+ *   opened on a different one exchanges nothing. Announcing success on the
+ *   presence of a code in the URL would be a claim made before the fact, and
+ *   wrong for precisely the person whose link did not work.
+ */
+check(
+  'success waits for the session, not for the code',
+  confirm.includes("outcome?.kind === 'exchange' && status === 'signedIn'"),
+  'a code in the URL is a request to exchange, not proof that one happened',
+);
+check(
+  'and an exchange that never lands falls through to a resend',
+  confirm.includes('setExchangeTimedOut(true)') &&
+    confirm.includes("outcome.kind === 'expired' || outcome.kind === 'exchange'"),
+  'otherwise the spinner is permanent and nothing on screen says what to do',
+);
+
 check(
   'the mismatch screen offers to sign out and re-resolve',
   confirm.includes('await signOut()') && confirm.includes('sessionEmail: null'),
@@ -248,6 +289,7 @@ if (failures > 0) {
 console.log(
   'PASS — an expired link explains itself and offers a resend to the right address, a link\n' +
     '       for another account is refused before anything is claimed, a link clicked twice\n' +
-    '       or clicked while already signed in is not an error, and "already confirmed" is\n' +
-    '       read from the only signal that reports it honestly.',
+    '       or clicked while already signed in is not an error, "already confirmed" is read\n' +
+    '       from the only signal that reports it honestly, and success is announced in the\n' +
+    '       specified words only once a session exists to justify it.',
 );

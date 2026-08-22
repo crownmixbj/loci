@@ -1,5 +1,5 @@
 import { useRouter } from 'expo-router';
-import { CircleAlert, MailWarning, UserRoundX } from 'lucide-react-native';
+import { CircleAlert, CircleCheckBig, MailWarning, UserRoundX } from 'lucide-react-native';
 import { useEffect, useMemo, useState } from 'react';
 import { ActivityIndicator, Platform, StyleSheet, Text, View } from 'react-native';
 
@@ -29,6 +29,14 @@ import { useSession } from '@/store/session';
  * The decision itself is in `lib/email-confirmation.ts` and is pure. This screen
  * only renders the outcome and, in one case, performs the exchange.
  */
+/**
+ * How long to wait for `detectSessionInUrl` to turn a code into a session.
+ *
+ * Long enough for a slow network to finish the exchange, short enough that
+ * nobody sits watching a spinner wondering whether to click the link again.
+ */
+const EXCHANGE_TIMEOUT_MS = 6_000;
+
 export default function ConfirmScreen() {
   const theme = useTheme();
   const router = useRouter();
@@ -62,26 +70,65 @@ export default function ConfirmScreen() {
     setOutcome(resolveConfirmation({ params, sessionEmail: user?.email ?? null }));
   }, [params, status, user?.email]);
 
-  /*
-   * The happy paths leave immediately.
-   *
-   * `supabase-js` exchanges the code itself — `detectSessionInUrl` is on — so by
-   * the time a session exists there is nothing for this screen to do but say so
-   * and get out of the way.
-   */
   useEffect(() => {
-    if (!outcome) return;
-
-    if (outcome.kind === 'already-signed-in' || outcome.kind === 'exchange') {
-      showToast('Email confirmed', {
-        message: 'Your account is active. Welcome to LOCI.',
-        tone: 'success',
-      });
-      router.replace('/');
-    }
-
-    if (outcome.kind === 'nothing') router.replace('/sign-in');
+    if (outcome?.kind === 'nothing') router.replace('/sign-in');
   }, [outcome, router]);
+
+  /*
+   * ⚠ Success is claimed only once there is a session, never on arrival.
+   *
+   *   `supabase-js` does the exchange itself — `detectSessionInUrl` is on — and
+   *   it can fail. Under PKCE the code verifier lives on the device that signed
+   *   up, so a link opened on a different phone from the one that created the
+   *   account exchanges nothing at all. Announcing "verified" the moment a code
+   *   appears in the URL would be a claim made before the fact, and wrong for
+   *   exactly the person whose link did not work.
+   *
+   *   So the screen waits. If a session arrives, it says so; if none has
+   *   arrived by the time the timer runs out, it falls through to the panel
+   *   below, which offers a fresh link.
+   */
+  const [exchangeTimedOut, setExchangeTimedOut] = useState(false);
+
+  useEffect(() => {
+    if (outcome?.kind !== 'exchange' || status === 'signedIn') return;
+
+    const timer = setTimeout(() => setExchangeTimedOut(true), EXCHANGE_TIMEOUT_MS);
+    return () => clearTimeout(timer);
+  }, [outcome?.kind, status]);
+
+  const verified =
+    outcome?.kind === 'already-signed-in' ||
+    (outcome?.kind === 'exchange' && status === 'signedIn');
+
+  /* ---------- verified ---------- */
+  if (verified) {
+    return (
+      <AuthShell
+        title="Email Verified Successfully"
+        subtitle={
+          outcome?.kind === 'already-signed-in'
+            ? 'This address was already confirmed, and you are signed in. Nothing else to do.'
+            : 'Your address is confirmed and your account is active. Welcome to LOCI.'
+        }>
+        <View style={styles.form}>
+          <View style={[styles.icon, { backgroundColor: theme.successSoft }]}>
+            <CircleCheckBig color={theme.success} size={28} />
+          </View>
+
+          {/*
+            A button rather than a redirect on a timer.
+
+            This screen exists to be read. Replacing the route after a second
+            would mean the confirmation somebody waited for flickers past on the
+            way to a home page, which is how people end up unsure whether it
+            worked and clicking the link again.
+          */}
+          <Button label="Continue to LOCI" onPress={() => router.replace('/')} />
+        </View>
+      </AuthShell>
+    );
+  }
 
   /*
     `nothing` is in here rather than falling through to the panel below.
@@ -89,12 +136,14 @@ export default function ConfirmScreen() {
     The effect above has already sent them to sign-in, but a render happens
     first — and without this it would be the "that link has expired" screen,
     shown for a frame to somebody who never clicked a link at all.
+
+    `exchange` waits here too, until either a session appears or the timer
+    above gives up.
   */
   if (
     !outcome ||
     outcome.kind === 'nothing' ||
-    outcome.kind === 'already-signed-in' ||
-    outcome.kind === 'exchange'
+    (outcome.kind === 'exchange' && !exchangeTimedOut)
   ) {
     return (
       <AuthShell title="Confirming your email" subtitle="One moment.">
@@ -151,16 +200,23 @@ export default function ConfirmScreen() {
     );
   }
 
-  /* ---------- expired, spent, or refused ---------- */
-  const expired = outcome.kind === 'expired';
+  /* ---------- expired, spent, refused, or an exchange that never landed ---------- */
+  const expired = outcome.kind === 'expired' || outcome.kind === 'exchange';
 
   return (
     <AuthShell
       title={expired ? 'That link has expired' : 'That link did not work'}
       subtitle={
-        expired
-          ? 'Confirmation links are good for one hour, and can only be used once. Send yourself a fresh one below.'
-          : outcome.message
+        outcome.kind === 'exchange'
+          ? /*
+              A link that produced no session. Usually PKCE: the code verifier
+              is on the device that signed up, so a link opened elsewhere has
+              nothing to exchange with. A fresh link opened on this device works.
+            */
+            'That link could not be completed on this device. Send yourself a fresh one and open it here.'
+          : expired
+            ? 'Confirmation links are good for one hour, and can only be used once. Send yourself a fresh one below.'
+            : outcome.message
       }>
       <View style={styles.form}>
         <View style={[styles.icon, { backgroundColor: theme.warningSoft }]}>
